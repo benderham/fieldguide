@@ -98,6 +98,41 @@ Fieldguide will not be judged by whether its prose sounds convincing. Evaluation
 
 Failed cases will remain visible. The purpose of the experiment is to learn how the system fails, not to curate a perfect demo.
 
+## Running locally
+
+Fieldguide is a [Flue](https://flueframework.com) project: agents are TypeScript functions in `src/agents/`. A module whose first line is the `'use agent'` directive exports agents, and each exported capitalised function is one agent whose name is its durable identity.
+
+### Setup
+
+```sh
+npm install
+```
+
+Then add a model provider API key to `.env` (any [provider Pi supports](https://pi.dev/docs/latest/providers#api-keys)):
+
+```sh
+GEMINI_API_KEY="..."
+```
+
+### Talk to the agent
+
+```sh
+npx flue run src/agents/fieldguide.ts --message "Say hello in five words or fewer."
+```
+
+Conversations are durable, stored via the SQLite adapter in `src/db.ts`. Pass `--id <id>` to continue an existing one:
+
+```sh
+npx flue run src/agents/fieldguide.ts --id audit-1 --message "What evidence should we review first?"
+```
+
+Typecheck with `npm run check:types`.
+
+### Learn more
+
+- [Flue docs](https://flueframework.com/docs/), or `npx flue docs` from the terminal.
+- See `AGENTS.md` for the project layout and common commands.
+
 ## Current status
 
 Fieldguide is an early learning project, not production software. The client, people, records, incidents, and operating metrics used in the initial experiment are entirely synthetic.
