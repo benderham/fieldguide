@@ -9,7 +9,9 @@ import { evidence, listEvidence, produceWorkflowMap, saveWorkflowMap } from './e
 const ctx = <T>(data: T) => ({ data }) as never;
 
 const validMap: WorkflowMap = {
-	steps: [{ actor: 'Duty editor', action: 'approves the release', evidenceId: 'procedure-approvals' }],
+	steps: [
+		{ actor: 'Duty editor', action: 'approves the release', evidenceId: 'procedure-approvals' },
+	],
 	gaps: ['no compliance log entry for #4821'],
 };
 
