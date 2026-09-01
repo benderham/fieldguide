@@ -5,7 +5,9 @@ import { MAX_STEPS, stepGate } from '../domain/workflow-map.ts';
 import { evidence, listEvidence, produceWorkflowMap } from '../tools/evidence.ts';
 
 export function Fieldguide() {
-	useModel('google/gemini-3.6-flash');
+	// thinkingLevel 'low' keeps the reserved output under Groq's free-tier 8000
+	// tokens-per-minute limit; the default reservation for this model exceeds it.
+	useModel('groq/openai/gpt-oss-20b', { thinkingLevel: 'low' });
 	const [stepsUsed, setStepsUsed] = usePersistentState('stepsUsed', 0);
 
 	useTool(listEvidence);
