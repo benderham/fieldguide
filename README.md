@@ -154,7 +154,10 @@ Fieldguide is an early learning project, not production software. The client, pe
 
 Forward Deployed Engineering sits between business discovery and production engineering. A polished final demo hides most of the interesting work: incorrect assumptions, awkward integrations, failed evals, recovery behaviour, and the decisions about where AI should not be used.
 
-Building in public creates a record of that work and makes the final case study evidence-based rather than retrospective.
+Building in public creates a record of that work and makes the final case study evidence-based rather than retrospective. Two documents keep that record:
+
+- [`docs/decisions.md`](docs/decisions.md) — an append-only log of the architectural decisions and the reasoning behind them.
+- [`docs/diary.md`](docs/diary.md) — plain-language updates at each milestone, for anyone following along.
 
 ## Licence
 
