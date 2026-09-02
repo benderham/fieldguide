@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { WorkflowMap } from '../domain/workflow-map.ts';
-import { evidence, listEvidence, produceWorkflowMap, saveWorkflowMap } from './evidence.ts';
+import {
+	createProduceWorkflowMap,
+	evidence,
+	listEvidence,
+	produceWorkflowMap,
+	saveWorkflowMap,
+} from './evidence.ts';
 
 // The tools only read `data`; the rest of the run() context is not exercised here.
 const ctx = <T>(data: T) => ({ data }) as never;
@@ -63,5 +69,34 @@ describe('produceWorkflowMap', () => {
 		const result = await produceWorkflowMap.run(ctx(badMap));
 		expect(typeof result).toBe('string');
 		expect(result).toContain('not-a-real-id');
+	});
+});
+
+describe('createProduceWorkflowMap', () => {
+	it('validates citations against the injected id predicate, not the fixtures', async () => {
+		const tool = createProduceWorkflowMap((id) => id === 'notion-page-42');
+		const map: WorkflowMap = {
+			steps: [{ actor: 'Editor', action: 'approves', evidenceId: 'notion-page-42' }],
+			gaps: [],
+		};
+
+		const result = (await tool.run(ctx(map))) as {
+			output: { map: WorkflowMap };
+			terminate: boolean;
+		};
+		expect(result.terminate).toBe(true);
+		expect(result.output.map).toEqual(map);
+	});
+
+	it('rejects an id the predicate does not recognise', async () => {
+		const tool = createProduceWorkflowMap(() => false);
+		const map: WorkflowMap = {
+			steps: [{ actor: 'Editor', action: 'approves', evidenceId: 'procedure-approvals' }],
+			gaps: [],
+		};
+
+		const result = await tool.run(ctx(map));
+		expect(typeof result).toBe('string');
+		expect(result).toContain('procedure-approvals');
 	});
 });

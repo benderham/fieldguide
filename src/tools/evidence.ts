@@ -38,17 +38,26 @@ export const listEvidence = defineTool({
 	},
 });
 
-export const produceWorkflowMap = defineTool({
-	name: 'produce_workflow_map',
-	description:
-		'Finish the audit by returning the preliminary workflow map. Call this once the workflow is reconstructed, or when told the step limit is reached. Each step must cite the id of an evidence excerpt it came from; use gaps for anything the evidence could not establish.',
-	input: WorkflowMap,
-	async run({ data }) {
-		const unknown = data.steps.map((step) => step.evidenceId).filter((id) => !evidenceIds.has(id));
-		if (unknown.length > 0) {
-			return `These evidenceId values are not real excerpts: ${unknown.join(', ')}. Cite only ids returned by list_evidence, then call produce_workflow_map again.`;
-		}
-		saveWorkflowMap(data);
-		return { output: { map: data, saved: 'data/last-workflow-map.json' }, terminate: true };
-	},
-});
+/**
+ * Build the finish tool. `isKnownId` decides which citations are real: eval
+ * runs pass the fixture ids, live runs pass the ids actually fetched during the
+ * run, so a map can never cite evidence the agent never opened.
+ */
+export function createProduceWorkflowMap(isKnownId: (id: string) => boolean) {
+	return defineTool({
+		name: 'produce_workflow_map',
+		description:
+			'Finish the audit by returning the preliminary workflow map. Call this once the workflow is reconstructed, or when told the step limit is reached. Each step must cite the id of a document you actually read; use gaps for anything the evidence could not establish.',
+		input: WorkflowMap,
+		async run({ data }) {
+			const unknown = data.steps.map((step) => step.evidenceId).filter((id) => !isKnownId(id));
+			if (unknown.length > 0) {
+				return `These evidenceId values are not documents you read: ${unknown.join(', ')}. Cite only ids you retrieved, then call produce_workflow_map again.`;
+			}
+			saveWorkflowMap(data);
+			return { output: { map: data, saved: 'data/last-workflow-map.json' }, terminate: true };
+		},
+	});
+}
+
+export const produceWorkflowMap = createProduceWorkflowMap((id) => evidenceIds.has(id));

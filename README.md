@@ -114,6 +114,19 @@ Then add a model provider API key to `.env` (any [provider Pi supports](https://
 FIREWORKS_API_KEY="..."
 ```
 
+#### Evidence source
+
+Fieldguide reaches evidence through two search-and-read tools whose choice the model makes each turn, plus one finish tool. Which pair is mounted depends on the environment:
+
+- **Live Notion** — set `NOTION_TOKEN` (a Notion integration token; optionally `NOTION_API_URL` to point at a proxy). The agent calls the Notion REST API and exposes `search_documents` (natural-language search, free) and `read_document` (fetch one document's text, costs one step). REST rather than MCP because the read has to be gated against the step budget, and Flue runs MCP tools only when the model calls them directly. This is the production path.
+- **Fixtures** — with no `NOTION_TOKEN`, the agent falls back to the local `evidence/*.md` corpus via `list_evidence` and `read_evidence`. This keeps the evals deterministic and offline.
+
+Both paths share one read budget (`MAX_STEPS`), and `produce_workflow_map` accepts only citations to documents the run actually read.
+
+```sh
+NOTION_TOKEN="..."
+```
+
 ### Talk to the agent
 
 ```sh
