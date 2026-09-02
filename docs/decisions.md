@@ -65,7 +65,7 @@ The deciding constraint: a Flue-mounted MCP tool executes only when the model ca
 
 ## ADR-0005 — Workflow-map citations are validated against documents actually read
 
-**Status:** ACCEPTED · 2026-09-02
+**Status:** AMENDED (by ADR-0007) · 2026-09-02
 
 **Context.** Each step in the produced workflow map cites the document it came from, so a reviewer can trace it. A citation is only meaningful if it points at a document the agent actually opened during the run.
 
@@ -84,3 +84,27 @@ The deciding constraint: a Flue-mounted MCP tool executes only when the model ca
 **Decision.** Rely on Notion's sharing. A Notion integration reads only the pages explicitly connected to it, and sub-pages inherit their parent's connection. Scoping is done by connecting the integration to a single root page and nothing else. Our code adds no ancestor filtering.
 
 **Consequences.** The boundary is enforced by Notion and needs no code. The search endpoint has no "within this subtree" filter, so this only works while the integration is connected to just the intended root. If the same integration ever needs connecting to unrelated pages, a code-side fence (a configured root id plus a descendant check) would have to be added as a later entry.
+
+---
+
+## ADR-0007 — The deliverable is one validated operating map covering all eight copilot outputs
+
+**Status:** ACCEPTED · 2026-09-02
+
+**Context.** The copilot assignment asks for eight outputs (a current-state operating map; an evidence and contradiction register; focused clarification questions; friction and risk; a software/agent/human responsibility map; a ranked opportunity assessment; a recommended thin-slice workflow; expected value and open assumptions) under five operating boundaries (cite the source behind every material finding; never resolve contradictory accounts silently; treat staff recollection as evidence not fact; escalate compliance-sensitive or irreversible decisions; do not infer that a manual step should use AI merely because it is manual). The previous deliverable was a `WorkflowMap` of `{actor, action, evidenceId}` steps plus `gaps`: it covered one of the eight and enforced only the citation boundary. This work makes the agent satisfy all eight and all five, proven on the local fixtures.
+
+**Decision.** One canonical valibot object, `OperatingMap` (`src/domain/operating-map.ts`), is the record; the `WorkflowMap` schema is superseded (ADR-0005 amended, its citation guarantee carried forward and widened). Five decisions define the design:
+
+1. **One object, phased tools.** The agent fills the map section by section, one tool per section (`record_claims`, `record_workflow`, and the rest), each validating its slice and merging it into a durable draft. `finish_operating_map` assembles the whole object, revalidates it, checks that every cross-reference resolves and every cited evidence id was actually read, then saves and ends the run. Phasing gives the small pinned model early, specific feedback rather than one all-or-nothing parse.
+
+2. **Claims are the substrate, classified at read time.** Every material finding is a `Claim` with a `type` (documented-policy, observed-practice, staff-recollection, system-fact, inference), a verbatim `quote` span, and the `evidenceId` it came from. The agent assigns the type; fixtures carry no machine tags. Typing is what encodes the boundary that staff recollection is evidence, not fact.
+
+3. **The boundaries are schema guards, not prompt hopes.** Citation: a claim needs a non-empty quote and an evidence id, `finish` rejects any evidence id the run did not read (the ADR-0005 mechanism, now over all claim types), and on the fixtures path a claim's quote must be a verbatim span of the cited document (collapsed-whitespace match); the live path cannot verify spans because read bodies are not retained. Never-resolve-silently: `Contradiction` has no resolution or winner field and a `needs-human` status; the type cannot express a silent resolution. Escalate: compliance-sensitive or irreversible items are flagged, and a compliance-sensitive opportunity may be recommended only with an assist-only AI part (a whole-object check). No-AI-because-manual: a responsibility entry may target `agent` only with a rationale naming the friction it addresses. These fail a parse or a `finish` call, so a run cannot end having crossed one.
+
+4. **The report is a pure function.** `renderReport(map)` (`src/domain/render-report.ts`) turns the object into Markdown with no model and no tokens, so the human-readable deliverable is deterministic and free.
+
+5. **Two eval layers.** Structural evals (deterministic Vitest) prove the schema and tools reject what the boundaries forbid. Behavioural evals (`src/evals/`) drive the real agent against the fixtures and grade seven gold cases k-of-n; the grader is pure and unit-tested, the live run is gated behind `RUN_LIVE_EVALS` so the default suite spends no tokens.
+
+Scope is fixtures-only; live-Notion parity is deferred to a later entry. The pinned model (`deepseek-v4-flash-0731`) is held; a bump, if the behavioural rate forces it, is its own entry.
+
+**Consequences.** The boundaries now hold by construction: the failure modes the assignment names (an uncited finding, a silently resolved contradiction, an interview treated as fact, an unbounded AI recommendation, AI proposed for a step with no friction behind it) are unrepresentable or rejected, not merely discouraged. The cost is a much larger schema and ten tools where there was one, and a longer agent loop: a full run makes a dozen-plus tool calls over many turns, which the pinned small model can do but slowly. Because Flue re-renders the agent each turn, the section tools keep an in-turn mirror of the draft so `finish` and the progress messages see sections recorded earlier in the same turn, which the turn-start persistent snapshot alone would miss; the durable write still goes through Flue state. Cross-object boundaries (compliance-sensitive recommendation, agent-target rationale resolving to a real friction) can only be checked once the whole object exists, so they live in the whole-map check and in `finish`, not in the per-section tools.

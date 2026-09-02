@@ -1,24 +1,8 @@
-import * as v from 'valibot';
+// The step budget and gate. The deliverable schema that once lived here is
+// superseded by `operating-map.ts` (see ADR-0007); only the read-budget
+// primitives remain, still shared by the fixture and live-Notion read paths.
 
-/**
- * A preliminary reconstruction of how the audited work happens. Each step ties
- * an actor to an action and cites the evidence excerpt it came from; `gaps`
- * records what the evidence could not establish.
- */
-export const WorkflowMap = v.object({
-	steps: v.array(
-		v.object({
-			actor: v.string(),
-			action: v.string(),
-			evidenceId: v.string(),
-		}),
-	),
-	gaps: v.array(v.string()),
-});
-
-export type WorkflowMap = v.InferOutput<typeof WorkflowMap>;
-
-/** Maximum `read_evidence` calls per run. Set below the fixture count so the cap is exercised. */
+/** Maximum evidence reads per run. Set below the fixture count so the cap is exercised. */
 export const MAX_STEPS = 4;
 
 export type StepGate = { allowed: true; message: null } | { allowed: false; message: string };

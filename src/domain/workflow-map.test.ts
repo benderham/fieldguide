@@ -1,6 +1,5 @@
-import * as v from 'valibot';
 import { describe, expect, it } from 'vitest';
-import { MAX_STEPS, WorkflowMap, stepGate } from './workflow-map.ts';
+import { MAX_STEPS, stepGate } from './workflow-map.ts';
 
 describe('stepGate', () => {
 	it('allows a read below the limit', () => {
@@ -21,24 +20,5 @@ describe('stepGate', () => {
 	it('defaults to MAX_STEPS', () => {
 		expect(stepGate(MAX_STEPS).allowed).toBe(false);
 		expect(stepGate(MAX_STEPS - 1).allowed).toBe(true);
-	});
-});
-
-describe('WorkflowMap schema', () => {
-	it('accepts a well-formed map', () => {
-		const map = {
-			steps: [{ actor: 'Editor', action: 'reviews release', evidenceId: 'procedure-approvals' }],
-			gaps: ['no compliance log entry for #4821'],
-		};
-		expect(v.parse(WorkflowMap, map)).toEqual(map);
-	});
-
-	it('rejects a step missing its evidence citation', () => {
-		const map = { steps: [{ actor: 'Editor', action: 'reviews release' }], gaps: [] };
-		expect(() => v.parse(WorkflowMap, map)).toThrow();
-	});
-
-	it('rejects a non-array gaps field', () => {
-		expect(() => v.parse(WorkflowMap, { steps: [], gaps: 'none' })).toThrow();
 	});
 });

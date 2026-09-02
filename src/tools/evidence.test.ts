@@ -1,25 +1,153 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { WorkflowMap } from '../domain/workflow-map.ts';
-import {
-	createProduceWorkflowMap,
-	evidence,
-	listEvidence,
-	produceWorkflowMap,
-	saveWorkflowMap,
-} from './evidence.ts';
+import type { OperatingMap, OperatingMapDraft } from '../domain/operating-map.ts';
+import { createOperatingMapTools, evidence, listEvidence } from './evidence.ts';
 
 // The tools only read `data`; the rest of the run() context is not exercised here.
 const ctx = <T>(data: T) => ({ data }) as never;
 
-const validMap: WorkflowMap = {
-	steps: [
-		{ actor: 'Duty editor', action: 'approves the release', evidenceId: 'procedure-approvals' },
-	],
-	gaps: ['no compliance log entry for #4821'],
-};
+/** A live in-memory stand-in for the agent's persistent draft, so tool writes accumulate across calls. */
+function harness(isKnownId: (id: string) => boolean = () => true) {
+	let state: OperatingMapDraft = {};
+	let saved: OperatingMap | undefined;
+	const tools = createOperatingMapTools({
+		isKnownId,
+		getState: () => state,
+		patch: (partial) => {
+			state = { ...state, ...partial };
+		},
+		save: (map) => {
+			saved = map;
+		},
+	});
+	return { tools, getState: () => state, getSaved: () => saved };
+}
+
+/** Record every section of a complete, self-consistent map through the tools. */
+async function recordFullMap(tools: ReturnType<typeof harness>['tools']) {
+	await tools.recordClaims.run(
+		ctx({
+			claims: [
+				{
+					claimId: 'c1',
+					type: 'documented-policy',
+					quote: 'MUST receive written compliance sign-off before distribution',
+					evidenceId: 'procedure-approvals',
+				},
+				{
+					claimId: 'c2',
+					type: 'observed-practice',
+					quote: 'the written sign-off step is more of a formality',
+					evidenceId: 'interview-editor',
+				},
+			],
+		}),
+	);
+	await tools.recordWorkflow.run(
+		ctx({
+			objective: 'Audit approvals',
+			steps: [
+				{
+					seq: 1,
+					actor: 'Duty editor',
+					action: 'approves',
+					documented: 'c1',
+					observed: 'c2',
+					diverges: true,
+					claimRefs: ['c1', 'c2'],
+					isException: false,
+				},
+			],
+		}),
+	);
+	await tools.recordContradictions.run(
+		ctx({
+			contradictions: [
+				{
+					topic: 'sign-off',
+					claimRefs: ['c1', 'c2'],
+					nature: 'policy vs practice',
+					status: 'needs-human',
+				},
+			],
+		}),
+	);
+	await tools.recordOpenQuestions.run(
+		ctx({
+			openQuestions: [
+				{
+					question: 'How often verbal?',
+					whyItMatters: 'control or formality',
+					refs: ['c1'],
+					blocking: true,
+				},
+			],
+		}),
+	);
+	await tools.recordFrictions.run(
+		ctx({
+			frictions: [
+				{
+					id: 'f1',
+					kind: 'risk',
+					description: 'unsigned distribution',
+					stepRef: '1',
+					claimRefs: ['c1'],
+					severity: 'high',
+					complianceSensitive: true,
+				},
+			],
+		}),
+	);
+	await tools.recordResponsibility.run(
+		ctx({
+			responsibility: [
+				{
+					stepRef: '1',
+					current: 'manual-human',
+					target: 'agent',
+					rationale: { frictionRef: 'f1', text: 'flag missing sign-off' },
+				},
+			],
+		}),
+	);
+	await tools.recordOpportunities.run(
+		ctx({
+			opportunities: [
+				{
+					id: 'o1',
+					description: 'check sign-off before push',
+					frictionRefs: ['f1'],
+					responsibilityTarget: 'agent',
+					impact: 'high',
+					effort: 'low',
+					reversibility: 'reversible',
+					complianceSensitive: true,
+				},
+			],
+		}),
+	);
+	await tools.recordRecommendation.run(
+		ctx({
+			recommendation: {
+				opportunityRef: 'o1',
+				scope: 'financial',
+				whatAgentDoes: 'warns editor',
+				aiRole: 'assist-only',
+				whatStaysHuman: ['sign-off'],
+				boundaries: ['never approves'],
+				whyBounded: 'irreversible publish',
+			},
+		}),
+	);
+	await tools.recordValue.run(
+		ctx({
+			expectedValue: {
+				statements: [{ text: 'catches unsigned releases', unquantified: true }],
+				assumptions: ['editors act on the warning'],
+			},
+		}),
+	);
+}
 
 describe('loadEvidence', () => {
 	it('loads the SignalWire fixtures with ids and titles', () => {
@@ -39,64 +167,98 @@ describe('listEvidence', () => {
 	});
 });
 
-describe('saveWorkflowMap', () => {
-	it('writes the map to the given path as JSON', () => {
-		const path = join(tmpdir(), `fieldguide-map-${process.pid}.json`);
-		try {
-			saveWorkflowMap(validMap, path);
-			expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual(validMap);
-		} finally {
-			if (existsSync(path)) rmSync(path);
-		}
-	});
-});
-
-describe('produceWorkflowMap', () => {
-	it('accepts a map that cites real excerpt ids and terminates the run', async () => {
-		const result = (await produceWorkflowMap.run(ctx(validMap))) as {
-			output: { map: WorkflowMap };
+describe('finish_operating_map', () => {
+	it('saves and terminates once a complete, consistent map is recorded', async () => {
+		const h = harness();
+		await recordFullMap(h.tools);
+		const result = (await h.tools.finish.run(ctx({}))) as {
+			output: { map: OperatingMap };
 			terminate: boolean;
 		};
 		expect(result.terminate).toBe(true);
-		expect(result.output.map).toEqual(validMap);
+		expect(h.getSaved()).toEqual(result.output.map);
 	});
 
-	it('rejects a citation to an unknown excerpt id without terminating', async () => {
-		const badMap: WorkflowMap = {
-			steps: [{ actor: 'Editor', action: 'approves', evidenceId: 'not-a-real-id' }],
-			gaps: [],
-		};
-		const result = await produceWorkflowMap.run(ctx(badMap));
+	it('refuses to finish while a required section is missing', async () => {
+		const h = harness();
+		await h.tools.recordClaims.run(
+			ctx({
+				claims: [
+					{
+						claimId: 'c1',
+						type: 'system-fact',
+						quote: 'WirePush has no integration',
+						evidenceId: 'system-distribution',
+					},
+				],
+			}),
+		);
+		const result = await h.tools.finish.run(ctx({}));
 		expect(typeof result).toBe('string');
-		expect(result).toContain('not-a-real-id');
+		expect(result).toContain('Still needed');
 	});
 });
 
-describe('createProduceWorkflowMap', () => {
-	it('validates citations against the injected id predicate, not the fixtures', async () => {
-		const tool = createProduceWorkflowMap((id) => id === 'notion-page-42');
-		const map: WorkflowMap = {
-			steps: [{ actor: 'Editor', action: 'approves', evidenceId: 'notion-page-42' }],
-			gaps: [],
-		};
+describe('record_claims evidence guard', () => {
+	it('rejects a claim citing evidence the run did not read', async () => {
+		const h = harness((id) => id === 'procedure-approvals');
+		const result = await h.tools.recordClaims.run(
+			ctx({
+				claims: [
+					{ claimId: 'c9', type: 'inference', quote: 'guesswork', evidenceId: 'never-read' },
+				],
+			}),
+		);
+		expect(typeof result).toBe('string');
+		expect(result).toContain('never-read');
+		expect(h.getState().claims).toBeUndefined();
+	});
+});
 
-		const result = (await tool.run(ctx(map))) as {
-			output: { map: WorkflowMap };
-			terminate: boolean;
-		};
-		expect(result.terminate).toBe(true);
-		expect(result.output.map).toEqual(map);
+describe('finish cross-reference checks', () => {
+	it('reports a dangling claimRef and does not terminate', async () => {
+		const h = harness();
+		await recordFullMap(h.tools);
+		await h.tools.recordWorkflow.run(
+			ctx({
+				objective: 'Audit approvals',
+				steps: [
+					{
+						seq: 1,
+						actor: 'Editor',
+						action: 'approves',
+						diverges: false,
+						claimRefs: ['ghost'],
+						isException: false,
+					},
+				],
+			}),
+		);
+		const result = await h.tools.finish.run(ctx({}));
+		expect(typeof result).toBe('string');
+		expect(result).toContain('ghost');
+		expect(h.getSaved()).toBeUndefined();
 	});
 
-	it('rejects an id the predicate does not recognise', async () => {
-		const tool = createProduceWorkflowMap(() => false);
-		const map: WorkflowMap = {
-			steps: [{ actor: 'Editor', action: 'approves', evidenceId: 'procedure-approvals' }],
-			gaps: [],
-		};
-
-		const result = await tool.run(ctx(map));
+	it('rejects a compliance-sensitive recommendation with an autonomous AI part', async () => {
+		const h = harness();
+		await recordFullMap(h.tools);
+		await h.tools.recordRecommendation.run(
+			ctx({
+				recommendation: {
+					opportunityRef: 'o1',
+					scope: 'financial',
+					whatAgentDoes: 'approves automatically',
+					aiRole: 'autonomous',
+					whatStaysHuman: ['nothing really'],
+					boundaries: [],
+					whyBounded: 'n/a',
+				},
+			}),
+		);
+		const result = await h.tools.finish.run(ctx({}));
 		expect(typeof result).toBe('string');
-		expect(result).toContain('procedure-approvals');
+		expect(result).toContain('does not validate');
+		expect(h.getSaved()).toBeUndefined();
 	});
 });
