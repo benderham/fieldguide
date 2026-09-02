@@ -111,7 +111,7 @@ npm install
 Then add a model provider API key to `.env` (any [provider Pi supports](https://pi.dev/docs/latest/providers#api-keys)):
 
 ```sh
-GROQ_API_KEY="..."
+FIREWORKS_API_KEY="..."
 ```
 
 ### Talk to the agent

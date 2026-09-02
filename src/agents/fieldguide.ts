@@ -3,11 +3,12 @@ import { defineTool, useModel, usePersistentState, useTool } from '@flue/runtime
 import * as v from 'valibot';
 import { MAX_STEPS, stepGate } from '../domain/workflow-map.ts';
 import { evidence, listEvidence, produceWorkflowMap } from '../tools/evidence.ts';
+// Registers a Fireworks provider whose catalog includes the pinned model below.
+// Side-effect import; `flue run` loads only this agent module.
+import '../providers.ts';
 
 export function Fieldguide() {
-	// thinkingLevel 'low' keeps the reserved output under Groq's free-tier 8000
-	// tokens-per-minute limit; the default reservation for this model exceeds it.
-	useModel('groq/openai/gpt-oss-20b', { thinkingLevel: 'low' });
+	useModel('fireworks/accounts/fireworks/models/deepseek-v4-flash-0731');
 	const [stepsUsed, setStepsUsed] = usePersistentState('stepsUsed', 0);
 
 	useTool(listEvidence);
