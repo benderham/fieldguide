@@ -16,6 +16,7 @@ import {
 	Opportunity,
 	type Provenance,
 	Recommendation,
+	recommendationProblems,
 	ResponsibilityEntry,
 	WorkflowStep,
 	validateCrossRefs,
@@ -324,20 +325,29 @@ export function createOperatingMapTools(deps: OperatingMapToolDeps) {
 		async run() {
 			const state = draft;
 
-			// The record tools already screen each section, so a recorded
-			// recommendation has passed the boundary guards. Re-validate it here at
-			// the save boundary anyway: a partial map is never final, and must not
-			// carry a recommendation that fails the guards (a prohibited autonomous
-			// approval, an unsupported one). Withhold it rather than save it.
+			// A partial map is never final, and must not carry a recommendation that
+			// fails the guards. Hold it to the same checks a complete map's
+			// recommendation gets: the schema (a prohibited autonomous approval), plus
+			// the cross-reference and compliance boundary (an unresolved opportunity, a
+			// compliance-sensitive one recommended autonomously, an unsupported
+			// citation). Withhold it rather than persist it.
 			let withheld: string | undefined;
 			// Stamp the validated objective, as finish does; the model never sets it.
 			const partial: OperatingMapDraft = { ...state, objective: deps.objective };
-			if (
-				state.recommendation !== undefined &&
-				!v.safeParse(Recommendation, state.recommendation).success
-			) {
-				withheld = state.recommendation.opportunityRef;
-				partial.recommendation = undefined;
+			if (state.recommendation !== undefined) {
+				const parsed = v.safeParse(Recommendation, state.recommendation);
+				const crossProblems = parsed.success
+					? recommendationProblems(
+							parsed.output,
+							state.claims ?? [],
+							state.opportunities ?? [],
+							deps.isKnownId,
+						)
+					: ['recommendation failed schema validation'];
+				if (!parsed.success || crossProblems.length > 0) {
+					withheld = state.recommendation.opportunityRef;
+					partial.recommendation = undefined;
+				}
 			}
 
 			const payload: IncompleteOperatingMap = {

@@ -291,6 +291,79 @@ describe('finish_incomplete', () => {
 		expect(saved?.draft.claims).toHaveLength(1);
 		expect(saved?.draft.recommendation).toBeUndefined();
 	});
+
+	async function recordClaimAndOpportunity(
+		tools: ReturnType<typeof harness>['tools'],
+		complianceSensitive: boolean,
+	) {
+		await tools.recordClaims.run(
+			ctx({
+				claims: [
+					{
+						claimId: 'c1',
+						type: 'system-fact',
+						quote: 'WirePush has no integration',
+						evidenceId: 'system-distribution',
+					},
+				],
+			}),
+		);
+		await tools.recordOpportunities.run(
+			ctx({
+				opportunities: [
+					{
+						id: 'o1',
+						description: 'check sign-off before push',
+						frictionRefs: [],
+						responsibilityTarget: 'agent',
+						impact: 'high',
+						effort: 'low',
+						reversibility: 'reversible',
+						complianceSensitive,
+					},
+				],
+			}),
+		);
+	}
+
+	const rec = (over: Record<string, unknown>) => ({
+		recommendation: {
+			opportunityRef: 'o1',
+			scope: 'financial',
+			whatAgentDoes: 'acts',
+			aiRole: 'assist-only',
+			decisionClass: 'advisory',
+			supportRefs: ['c1'],
+			whatStaysHuman: ['sign-off'],
+			boundaries: [],
+			whyBounded: 'bounded',
+			...over,
+		},
+	});
+
+	it('withholds a compliance-sensitive opportunity recommended autonomously', async () => {
+		const h = harness();
+		await recordClaimAndOpportunity(h.tools, true);
+		await h.tools.recordRecommendation.run(ctx(rec({ aiRole: 'autonomous' })));
+		await h.tools.finishIncomplete.run(ctx({}));
+		expect(h.getSavedIncomplete()?.draft.recommendation).toBeUndefined();
+	});
+
+	it('withholds a recommendation whose support cites unread, unrecorded evidence', async () => {
+		const h = harness((id) => id === 'system-distribution');
+		await recordClaimAndOpportunity(h.tools, false);
+		await h.tools.recordRecommendation.run(ctx(rec({ supportRefs: ['ghost'] })));
+		await h.tools.finishIncomplete.run(ctx({}));
+		expect(h.getSavedIncomplete()?.draft.recommendation).toBeUndefined();
+	});
+
+	it('keeps a supported, compliant recommendation', async () => {
+		const h = harness();
+		await recordClaimAndOpportunity(h.tools, false);
+		await h.tools.recordRecommendation.run(ctx(rec({})));
+		await h.tools.finishIncomplete.run(ctx({}));
+		expect(h.getSavedIncomplete()?.draft.recommendation).toBeDefined();
+	});
 });
 
 describe('turn counting', () => {

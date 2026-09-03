@@ -284,7 +284,6 @@ export function validateCrossRefs(map: OperatingMap, isKnownId: (id: string) => 
 	const claimIds = new Set(map.claims.map((c) => c.claimId));
 	const stepSeqs = new Set(map.steps.map((s) => String(s.seq)));
 	const frictionIds = new Set(map.frictions.map((f) => f.id));
-	const oppIds = new Set(map.opportunities.map((o) => o.id));
 
 	if (map.claims.length !== claimIds.size) problems.push('claimId values must be unique.');
 	if (map.claims.length === 0) problems.push('Record at least one claim before finishing.');
@@ -341,18 +340,6 @@ export function validateCrossRefs(map: OperatingMap, isKnownId: (id: string) => 
 				problems.push(`Opportunity '${o.id}' cites unknown friction '${r}'.`);
 		}
 	}
-	if (!oppIds.has(map.recommendation.opportunityRef)) {
-		problems.push(
-			`Recommendation references unknown opportunity '${map.recommendation.opportunityRef}'.`,
-		);
-	}
-	for (const r of map.recommendation.supportRefs) {
-		if (!claimIds.has(r) && !isKnownId(r)) {
-			problems.push(
-				`Recommendation cites support '${r}', which is neither a claim nor read evidence.`,
-			);
-		}
-	}
 	for (const s of map.expectedValue.statements) {
 		if (s.evidenceRef !== undefined && !claimIds.has(s.evidenceRef) && !isKnownId(s.evidenceRef)) {
 			problems.push(
@@ -361,5 +348,45 @@ export function validateCrossRefs(map: OperatingMap, isKnownId: (id: string) => 
 		}
 	}
 
+	problems.push(
+		...recommendationProblems(map.recommendation, map.claims, map.opportunities, isKnownId),
+	);
+
+	return problems;
+}
+
+/**
+ * Check a recommendation's cross-references and the compliance boundary, given
+ * the claims and opportunities in scope: its opportunity must exist, a
+ * compliance-sensitive one may be recommended only with an assist-only AI part,
+ * and every supportRef must resolve to a claim or read evidence. Shared by the
+ * whole-map validation and the incomplete-finish screen so a partial map is held
+ * to the same guards as a complete one. Empty when clean.
+ */
+export function recommendationProblems(
+	recommendation: Recommendation,
+	claims: Claim[],
+	opportunities: Opportunity[],
+	isKnownId: (id: string) => boolean,
+): string[] {
+	const problems: string[] = [];
+	const claimIds = new Set(claims.map((c) => c.claimId));
+	const opp = opportunities.find((o) => o.id === recommendation.opportunityRef);
+	if (opp === undefined) {
+		problems.push(
+			`Recommendation references unknown opportunity '${recommendation.opportunityRef}'.`,
+		);
+	} else if (opp.complianceSensitive && recommendation.aiRole !== 'assist-only') {
+		problems.push(
+			'a compliance-sensitive opportunity may only be recommended with an assist-only AI part',
+		);
+	}
+	for (const r of recommendation.supportRefs) {
+		if (!claimIds.has(r) && !isKnownId(r)) {
+			problems.push(
+				`Recommendation cites support '${r}', which is neither a claim nor read evidence.`,
+			);
+		}
+	}
 	return problems;
 }
