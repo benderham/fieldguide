@@ -76,6 +76,9 @@ export type OperatingMapToolDeps = {
 	patch: (partial: OperatingMapDraft) => void;
 	save?: (map: OperatingMapType) => void;
 	saveIncomplete?: (map: IncompleteOperatingMap) => void;
+	// The validated audit objective. Stamped onto the map at finish so the model
+	// never persists an objective of its own.
+	objective: string;
 	// Where the run's evidence came from. Set on the whole map at finish so the
 	// model cannot spoof it: a live-sourced map is stamped provisional, never final.
 	provenance: Provenance;
@@ -99,8 +102,9 @@ export type IncompleteOperatingMap = {
 	draft: OperatingMapDraft;
 };
 
+// The objective is not here: it is the validated audit objective, stamped by the
+// run at finish, not a section the model records.
 const REQUIRED_SECTIONS: Array<{ key: keyof OperatingMapDraft; label: string; tool: string }> = [
-	{ key: 'objective', label: 'objective', tool: 'record_workflow' },
 	{ key: 'claims', label: 'claims', tool: 'record_claims' },
 	{ key: 'steps', label: 'workflow steps', tool: 'record_workflow' },
 	{ key: 'frictions', label: 'friction and risk', tool: 'record_frictions' },
@@ -203,12 +207,11 @@ export function createOperatingMapTools(deps: OperatingMapToolDeps) {
 	const recordWorkflow = section({
 		name: 'record_workflow',
 		description:
-			'Record the audit objective and the operating spine: the ordered steps of how the work actually happens. For each step give a seq, the actor, the action, the claimRefs it rests on, and set diverges when the documented policy and the observed practice disagree. Reference the documented and observed claims by claimId. Mark isException for steps that only happen as an exception.',
+			'Record the operating spine: the ordered steps of how the work actually happens. For each step give a seq, the actor, the action, the claimRefs it rests on, and set diverges when the documented policy and the observed practice disagree. Reference the documented and observed claims by claimId. Mark isException for steps that only happen as an exception. The audit objective is fixed from the submitted request; you do not supply it.',
 		schema: v.object({
-			objective: v.pipe(v.string(), v.minLength(1)),
 			steps: v.array(WorkflowStep),
 		}),
-		merge: (value) => ({ objective: value.objective, steps: value.steps }),
+		merge: (value) => ({ steps: value.steps }),
 	});
 
 	const recordContradictions = section({
@@ -279,7 +282,8 @@ export function createOperatingMapTools(deps: OperatingMapToolDeps) {
 			}
 
 			const candidate = {
-				objective: state.objective ?? '',
+				// The run stamps the validated audit objective; the model never sets it.
+				objective: deps.objective,
 				// The run sets provenance and status; a live-sourced map is provisional,
 				// never final, because its quotes cannot be verified.
 				provenance: deps.provenance,
@@ -326,7 +330,8 @@ export function createOperatingMapTools(deps: OperatingMapToolDeps) {
 			// carry a recommendation that fails the guards (a prohibited autonomous
 			// approval, an unsupported one). Withhold it rather than save it.
 			let withheld: string | undefined;
-			const partial: OperatingMapDraft = { ...state };
+			// Stamp the validated objective, as finish does; the model never sets it.
+			const partial: OperatingMapDraft = { ...state, objective: deps.objective };
 			if (
 				state.recommendation !== undefined &&
 				!v.safeParse(Recommendation, state.recommendation).success

@@ -14,6 +14,7 @@ const ctx = <T>(data: T) => ({ data }) as never;
 function harness(
 	isKnownId: (id: string) => boolean = () => true,
 	provenance: 'fixture' | 'live' = 'fixture',
+	objective = 'Audit approvals',
 ) {
 	let state: OperatingMapDraft = {};
 	let saved: OperatingMap | undefined;
@@ -31,6 +32,7 @@ function harness(
 		saveIncomplete: (map) => {
 			savedIncomplete = map;
 		},
+		objective,
 		provenance,
 		spendTurn: () => {
 			turns += 1;
@@ -67,7 +69,6 @@ async function recordFullMap(tools: ReturnType<typeof harness>['tools']) {
 	);
 	await tools.recordWorkflow.run(
 		ctx({
-			objective: 'Audit approvals',
 			steps: [
 				{
 					seq: 1,
@@ -240,6 +241,28 @@ describe('provenance and status stamping', () => {
 		expect(result.output.map.provenance).toBe('live');
 		expect(result.output.map.status).toBe('provisional');
 	});
+
+	it('stamps the validated objective, ignoring anything the model sends to record_workflow', async () => {
+		const h = harness(() => true, 'fixture', 'Canonical audit objective');
+		await recordFullMap(h.tools);
+		await h.tools.recordWorkflow.run(
+			ctx({
+				objective: 'ATTACKER OVERRIDE',
+				steps: [
+					{
+						seq: 1,
+						actor: 'Duty editor',
+						action: 'approves',
+						diverges: false,
+						claimRefs: ['c1'],
+						isException: false,
+					},
+				],
+			}),
+		);
+		const result = (await h.tools.finish.run(ctx({}))) as { output: { map: OperatingMap } };
+		expect(result.output.map.objective).toBe('Canonical audit objective');
+	});
 });
 
 describe('finish_incomplete', () => {
@@ -300,7 +323,6 @@ describe('finish cross-reference checks', () => {
 		await recordFullMap(h.tools);
 		await h.tools.recordWorkflow.run(
 			ctx({
-				objective: 'Audit approvals',
 				steps: [
 					{
 						seq: 1,

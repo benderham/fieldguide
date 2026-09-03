@@ -31,11 +31,13 @@ export function Fieldguide() {
 
 	// Validate the submitted objective at the intake seam: a throw here fails the
 	// submission before the first model turn. Signals carry no human input, so
-	// only user deliveries are checked.
+	// only user deliveries are checked. This validated objective is the one the
+	// finished map is stamped with; the model never supplies its own.
 	const delivery = useDelivery();
 	useAgentStart(() => {
 		if (delivery.kind === 'user') assertValidObjective(delivery.body);
 	});
+	const objective = delivery.kind === 'user' ? delivery.body.trim() : '';
 
 	const [stepsUsed, setStepsUsed] = usePersistentState('stepsUsed', 0);
 	const [turnsUsed, setTurnsUsed] = usePersistentState('turnsUsed', 0);
@@ -59,6 +61,7 @@ export function Fieldguide() {
 		isKnownId: (id) => readIds.includes(id),
 		getState: () => draft,
 		patch: (partial) => setDraft((previous) => ({ ...previous, ...partial })),
+		objective,
 		provenance,
 		spendTurn,
 		verifyQuote: liveNotion ? undefined : verifyFixtureQuote,
@@ -165,10 +168,10 @@ export function Fieldguide() {
 		'  staff-recollection for what an interviewee remembers, system-fact for a tool',
 		'  or log statement, inference for your own reasoning. A staff interview is',
 		'  staff-recollection, never fact.',
-		'- record_workflow: the objective and the operating spine. When a step is done',
-		'  differently from how policy says, set diverges and set documented and observed',
-		'  to the claimIds of the written rule and the actual practice, so the split is',
-		'  traceable.',
+		'- record_workflow: the operating spine (the objective is fixed from the request,',
+		'  you do not supply it). When a step is done differently from how policy says,',
+		'  set diverges and set documented and observed to the claimIds of the written',
+		'  rule and the actual practice, so the split is traceable.',
 		'- record_contradictions: conflicting claims. When written policy and practice',
 		'  disagree, one side of the contradiction should be the documented-policy claim',
 		'  that states the rule. Record both; never pick a winner.',
