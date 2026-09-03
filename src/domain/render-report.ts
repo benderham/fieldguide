@@ -26,6 +26,13 @@ export function renderReport(map: OperatingMap): string {
 
 	const lines: string[] = [`# Operating map: ${map.objective}`, ''];
 
+	if (map.status === 'provisional') {
+		lines.push(
+			`> **Provisional map (${map.provenance}-sourced).** Findings are not final until a human verifies them.`,
+			'',
+		);
+	}
+
 	lines.push(...controlPoints(map));
 	lines.push('## 1. Current-state operating map', '');
 	for (const step of map.steps) lines.push(...renderStep(step, quote));
@@ -136,7 +143,8 @@ function renderRecommendation(r: Recommendation): string[] {
 	return [
 		`Try opportunity **${r.opportunityRef}**, scoped to ${r.scope}.`,
 		'',
-		`- What the agent does (${r.aiRole}): ${r.whatAgentDoes}`,
+		`- What the agent does (${r.aiRole}, ${r.decisionClass}): ${r.whatAgentDoes}`,
+		`- Support: ${r.supportRefs.join(', ')}`,
 		`- Stays human: ${r.whatStaysHuman.join('; ')}`,
 		`- Boundaries: ${r.boundaries.length > 0 ? r.boundaries.join('; ') : '_none stated_'}`,
 		`- Why bounded: ${r.whyBounded}`,

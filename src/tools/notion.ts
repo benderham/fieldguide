@@ -163,10 +163,12 @@ export async function searchRun(params: {
 export function notionTools(deps: {
 	stepsUsed: number;
 	spend: () => void;
+	spendTurn?: () => void;
 	onRead: (id: string) => void;
 	fetchDelegate?: ToolDelegate;
 	searchDelegate?: ToolDelegate;
 }) {
+	const spendTurn = deps.spendTurn ?? (() => {});
 	const defaults = createNotionDelegates({ token: process.env.NOTION_TOKEN ?? '' });
 	const fetchDelegate = deps.fetchDelegate ?? defaults.fetchDelegate;
 	const searchDelegate = deps.searchDelegate ?? defaults.searchDelegate;
@@ -176,8 +178,10 @@ export function notionTools(deps: {
 		description:
 			'Search Notion for documents with a natural-language query. Free to call and does not count as a step. Use it to find which documents are worth reading before you spend a read.',
 		input: v.object({ query: v.string() }),
-		run: ({ data, toolCallId, log, signal }) =>
-			searchRun({ data, ctx: { toolCallId, log, signal }, searchDelegate }) as never,
+		run: ({ data, toolCallId, log, signal }) => {
+			spendTurn();
+			return searchRun({ data, ctx: { toolCallId, log, signal }, searchDelegate }) as never;
+		},
 	});
 
 	const readDocument = defineTool({
@@ -185,8 +189,9 @@ export function notionTools(deps: {
 		description:
 			'Read the full text of one Notion document by id. Each successful call is one investigative step and counts against the step budget. Read one document at a time, then decide the next.',
 		input: v.object({ id: v.string() }),
-		run: ({ data, toolCallId, log, signal }) =>
-			readDocumentRun({
+		run: ({ data, toolCallId, log, signal }) => {
+			spendTurn();
+			return readDocumentRun({
 				gate: stepGate(deps.stepsUsed),
 				data,
 				ctx: { toolCallId, log, signal },
@@ -195,7 +200,8 @@ export function notionTools(deps: {
 					deps.spend();
 					deps.onRead(data.id);
 				},
-			}) as never,
+			}) as never;
+		},
 	});
 
 	return { searchDocuments, readDocument };

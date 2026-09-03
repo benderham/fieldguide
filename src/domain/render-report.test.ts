@@ -4,6 +4,8 @@ import { renderReport } from './render-report.ts';
 
 const map: OperatingMap = {
 	objective: 'Audit the press-release approval workflow',
+	provenance: 'fixture',
+	status: 'final',
 	claims: [
 		{
 			claimId: 'c1',
@@ -83,6 +85,8 @@ const map: OperatingMap = {
 		scope: 'Financial releases only',
 		whatAgentDoes: 'Warns the editor when no sign-off log entry exists',
 		aiRole: 'assist-only',
+		decisionClass: 'advisory',
+		supportRefs: ['c1', 'c2'],
 		whatStaysHuman: ['Compliance sign-off', 'The decision to distribute'],
 		boundaries: ['Never approves', 'Never pushes'],
 		whyBounded: 'Approval and distribution are compliance-sensitive and irreversible',
@@ -148,8 +152,18 @@ describe('renderReport', () => {
 		expect(report).toContain('Editors act on the warning rather than dismissing it');
 	});
 
-	it('states the recommendation aiRole and what stays human', () => {
-		expect(report).toContain('What the agent does (assist-only)');
+	it('states the recommendation aiRole, decision class, support, and what stays human', () => {
+		expect(report).toContain('What the agent does (assist-only, advisory)');
+		expect(report).toContain('Support: c1, c2');
 		expect(report).toContain('Stays human: Compliance sign-off; The decision to distribute');
+	});
+
+	it('does not add a provisional banner to a final fixture map', () => {
+		expect(report).not.toContain('Provisional map');
+	});
+
+	it('adds a provisional banner to a live-sourced map', () => {
+		const live = renderReport({ ...map, provenance: 'live', status: 'provisional' });
+		expect(live).toContain('Provisional map (live-sourced)');
 	});
 });

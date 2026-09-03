@@ -1,11 +1,17 @@
 import * as v from 'valibot';
 import { describe, expect, it } from 'vitest';
-import { type OperatingMap as OperatingMapType, OperatingMap } from './operating-map.ts';
+import {
+	type OperatingMap as OperatingMapType,
+	OperatingMap,
+	validateCrossRefs,
+} from './operating-map.ts';
 
 /** A minimal but complete map that satisfies every guard, used as the baseline each rejection test mutates. */
 function validMap(): OperatingMapType {
 	return {
 		objective: 'Audit the press-release approval workflow',
+		provenance: 'fixture',
+		status: 'final',
 		claims: [
 			{
 				claimId: 'c1',
@@ -86,6 +92,8 @@ function validMap(): OperatingMapType {
 			scope: 'Financial releases only',
 			whatAgentDoes: 'Warns the editor when no sign-off log entry exists',
 			aiRole: 'assist-only',
+			decisionClass: 'advisory',
+			supportRefs: ['c1', 'c2'],
 			whatStaysHuman: ['Compliance sign-off', 'The decision to distribute'],
 			boundaries: ['Never approves', 'Never pushes'],
 			whyBounded: 'Approval and distribution are compliance-sensitive and irreversible',
@@ -171,6 +179,45 @@ describe('recommendation guards', () => {
 		map.opportunities[0].complianceSensitive = false;
 		map.recommendation.aiRole = 'autonomous';
 		expect(() => v.parse(OperatingMap, map)).not.toThrow();
+	});
+
+	it('rejects an autonomous AI part making an approval or publish decision', () => {
+		const map = validMap();
+		map.opportunities[0].complianceSensitive = false;
+		map.recommendation.aiRole = 'autonomous';
+		map.recommendation.decisionClass = 'approval';
+		expect(() => v.parse(OperatingMap, map)).toThrow();
+	});
+
+	it('rejects a recommendation with no supporting citation', () => {
+		const map = validMap();
+		map.recommendation.supportRefs = [];
+		expect(() => v.parse(OperatingMap, map)).toThrow();
+	});
+});
+
+describe('provenance and status guard', () => {
+	it('rejects a live-sourced map marked final', () => {
+		const map = validMap();
+		map.provenance = 'live';
+		map.status = 'final';
+		expect(() => v.parse(OperatingMap, map)).toThrow();
+	});
+
+	it('accepts a live-sourced map marked provisional', () => {
+		const map = validMap();
+		map.provenance = 'live';
+		map.status = 'provisional';
+		expect(() => v.parse(OperatingMap, map)).not.toThrow();
+	});
+});
+
+describe('supportRefs cross-reference', () => {
+	it('flags a supportRef that is neither a claim nor read evidence', () => {
+		const map = validMap();
+		map.recommendation.supportRefs = ['ghost'];
+		const problems = validateCrossRefs(map, (id) => map.claims.some((c) => c.evidenceId === id));
+		expect(problems.some((p) => p.includes('ghost'))).toBe(true);
 	});
 });
 

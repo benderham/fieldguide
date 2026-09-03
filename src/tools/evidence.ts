@@ -14,6 +14,7 @@ import {
 	type OperatingMap as OperatingMapType,
 	type OperatingMapDraft,
 	Opportunity,
+	type Provenance,
 	Recommendation,
 	ResponsibilityEntry,
 	WorkflowStep,
@@ -26,6 +27,12 @@ const evidenceDir = fileURLToPath(new URL('../../evidence/', import.meta.url));
 // slice the deliverable is written to a file so a run produces something a
 // reviewer can open.
 const mapPath = fileURLToPath(new URL('../../data/last-operating-map.json', import.meta.url));
+
+// A turn-capped run writes its partial map here, kept separate from the finished
+// artifact so a reviewer never mistakes an incomplete map for a final one.
+const incompletePath = fileURLToPath(
+	new URL('../../data/last-operating-map.incomplete.json', import.meta.url),
+);
 
 /** Load every `.md` excerpt from the evidence directory, sorted by filename. */
 export function loadEvidence(dir: string = evidenceDir): Excerpt[] {
@@ -40,6 +47,15 @@ export const evidenceIds = new Set(evidence.map((item) => item.id));
 
 /** Write a finished operating map to disk as JSON, creating the target directory. */
 export function saveOperatingMap(map: OperatingMapType, path: string = mapPath): void {
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, JSON.stringify(map, null, 2));
+}
+
+/** Write a turn-capped partial map to disk, kept apart from the finished artifact. */
+export function saveIncompleteMap(
+	map: IncompleteOperatingMap,
+	path: string = incompletePath,
+): void {
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, JSON.stringify(map, null, 2));
 }
@@ -59,10 +75,28 @@ export type OperatingMapToolDeps = {
 	getState: () => OperatingMapDraft;
 	patch: (partial: OperatingMapDraft) => void;
 	save?: (map: OperatingMapType) => void;
+	saveIncomplete?: (map: IncompleteOperatingMap) => void;
+	// Where the run's evidence came from. Set on the whole map at finish so the
+	// model cannot spoof it: a live-sourced map is stamped provisional, never final.
+	provenance: Provenance;
+	// Count one tool-calling turn. The agent gates its own turn budget on this.
+	spendTurn?: () => void;
 	// Confirm a quote is a real span of the cited document. Supplied on the
 	// fixtures path, where the bodies are in hand; omitted on the live path,
 	// where read bodies are not retained.
 	verifyQuote?: (evidenceId: string, quote: string) => boolean;
+};
+
+/**
+ * A map saved when the turn budget runs out before the map is whole. It carries
+ * whatever sections were recorded, is always `provisional`, and never passes as
+ * a final `OperatingMap`.
+ */
+export type IncompleteOperatingMap = {
+	incomplete: true;
+	provenance: Provenance;
+	status: 'provisional';
+	draft: OperatingMapDraft;
 };
 
 const REQUIRED_SECTIONS: Array<{ key: keyof OperatingMapDraft; label: string; tool: string }> = [
@@ -110,6 +144,8 @@ function firstIssue(
  */
 export function createOperatingMapTools(deps: OperatingMapToolDeps) {
 	const save = deps.save ?? saveOperatingMap;
+	const saveIncomplete = deps.saveIncomplete ?? saveIncompleteMap;
+	const spendTurn = deps.spendTurn ?? (() => {});
 
 	// Flue re-renders the agent each turn, so this factory runs per turn and seeds
 	// the mirror from the latest durable draft. Within a turn the mirror also
@@ -133,6 +169,7 @@ export function createOperatingMapTools(deps: OperatingMapToolDeps) {
 			description: config.description,
 			input: config.schema as never,
 			async run({ data }) {
+				spendTurn();
 				const parsed = v.safeParse(config.schema, data);
 				if (!parsed.success) return `Rejected: ${firstIssue(parsed.issues)}.`;
 				const evidenceProblems = config.checkEvidence?.(parsed.output) ?? [];
@@ -217,7 +254,7 @@ export function createOperatingMapTools(deps: OperatingMapToolDeps) {
 	const recordRecommendation = section({
 		name: 'record_recommendation',
 		description:
-			'Record the single recommended thin-slice workflow: the opportunityRef, the scope, what the agent does, aiRole (assist-only or autonomous), what stays human (at least one item), the boundaries, and why it is bounded. The AI part must never approve compliance or trigger an irreversible publish.',
+			'Record the single recommended thin-slice workflow: the opportunityRef, the scope, what the agent does, aiRole (assist-only or autonomous), decisionClass (advisory, approval, or publish), supportRefs (the claimIds or evidence ids that justify it, at least one), what stays human (at least one item), the boundaries, and why it is bounded. An autonomous aiRole may never carry an approval or publish decisionClass, and the AI part must never approve compliance or trigger an irreversible publish.',
 		schema: v.object({ recommendation: Recommendation }),
 		merge: (value) => ({ recommendation: value.recommendation }),
 	});
@@ -243,6 +280,10 @@ export function createOperatingMapTools(deps: OperatingMapToolDeps) {
 
 			const candidate = {
 				objective: state.objective ?? '',
+				// The run sets provenance and status; a live-sourced map is provisional,
+				// never final, because its quotes cannot be verified.
+				provenance: deps.provenance,
+				status: deps.provenance === 'live' ? 'provisional' : 'final',
 				claims: state.claims ?? [],
 				steps: state.steps ?? [],
 				contradictions: state.contradictions ?? [],
@@ -272,6 +313,50 @@ export function createOperatingMapTools(deps: OperatingMapToolDeps) {
 		},
 	});
 
+	const finishIncomplete = defineTool({
+		name: 'finish_incomplete',
+		description:
+			'Finish with a partial map when the turn budget is spent. It saves whatever sections were recorded, marked incomplete and provisional, and ends the run. Any prohibited autonomous approval recommendation is withheld rather than saved.',
+		async run() {
+			const state = draft;
+
+			// The record tools already screen each section, so a recorded
+			// recommendation has passed the boundary guards. Re-validate it here at
+			// the save boundary anyway: a partial map is never final, and must not
+			// carry a recommendation that fails the guards (a prohibited autonomous
+			// approval, an unsupported one). Withhold it rather than save it.
+			let withheld: string | undefined;
+			const partial: OperatingMapDraft = { ...state };
+			if (
+				state.recommendation !== undefined &&
+				!v.safeParse(Recommendation, state.recommendation).success
+			) {
+				withheld = state.recommendation.opportunityRef;
+				partial.recommendation = undefined;
+			}
+
+			const payload: IncompleteOperatingMap = {
+				incomplete: true,
+				provenance: deps.provenance,
+				status: 'provisional',
+				draft: partial,
+			};
+			saveIncomplete(payload);
+
+			const withheldNote = withheld
+				? ` Withheld the prohibited autonomous-approval recommendation for '${withheld}'.`
+				: '';
+			return {
+				output: {
+					map: payload,
+					saved: 'data/last-operating-map.incomplete.json',
+					note: `Turn budget spent. Saved a provisional, incomplete map.${withheldNote}`,
+				},
+				terminate: true,
+			};
+		},
+	});
+
 	const tools = {
 		recordClaims,
 		recordWorkflow,
@@ -284,5 +369,5 @@ export function createOperatingMapTools(deps: OperatingMapToolDeps) {
 		recordValue,
 		finish,
 	};
-	return { ...tools, all: Object.values(tools) };
+	return { ...tools, finishIncomplete, all: Object.values(tools) };
 }

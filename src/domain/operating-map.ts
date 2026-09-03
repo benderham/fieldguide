@@ -138,6 +138,25 @@ export type ResponsibilityEntry = v.InferOutput<typeof ResponsibilityEntry>;
 export const AiRole = v.picklist(['assist-only', 'autonomous']);
 export type AiRole = v.InferOutput<typeof AiRole>;
 
+/**
+ * What kind of decision a recommendation's action makes. `approval` and
+ * `publish` are the boundary-sensitive classes: a compliance sign-off, or an
+ * irreversible release. `advisory` only informs a human who then decides.
+ */
+export const DecisionClass = v.picklist(['advisory', 'approval', 'publish']);
+export type DecisionClass = v.InferOutput<typeof DecisionClass>;
+
+/** An autonomous AI part making an approval or publish decision: the one recommendation the boundary forbids outright. */
+export function isProhibitedAutonomy(rec: {
+	aiRole: AiRole;
+	decisionClass: DecisionClass;
+}): boolean {
+	return (
+		rec.aiRole === 'autonomous' &&
+		(rec.decisionClass === 'approval' || rec.decisionClass === 'publish')
+	);
+}
+
 /** A ranked improvement opportunity, scored on impact, effort, and reversibility, tied to the frictions it would relieve. */
 export const Opportunity = v.object({
 	id: nonEmpty('id is required'),
@@ -153,22 +172,36 @@ export type Opportunity = v.InferOutput<typeof Opportunity>;
 
 /**
  * The single recommended thin-slice workflow. `whatStaysHuman` must be non-empty,
- * and `aiRole` records whether the AI part is assist-only. The whole-map check
- * (see `OperatingMap`) forbids recommending a compliance-sensitive opportunity
- * unless its AI part is assist-only.
+ * and `aiRole` records whether the AI part is assist-only. `supportRefs` ties the
+ * recommendation to the claims or read evidence that justify it: a recommendation
+ * with no support cannot be a final finding. The entry check forbids an autonomous
+ * AI part from making an approval or publish decision; the whole-map check (see
+ * `OperatingMap`) additionally forbids recommending a compliance-sensitive
+ * opportunity unless its AI part is assist-only.
  */
-export const Recommendation = v.object({
-	opportunityRef: nonEmpty('opportunityRef is required'),
-	scope: nonEmpty('scope is required'),
-	whatAgentDoes: nonEmpty('whatAgentDoes is required'),
-	aiRole: AiRole,
-	whatStaysHuman: nonEmptyArray(
-		v.string(),
-		'whatStaysHuman must list at least one human-held step',
+export const Recommendation = v.pipe(
+	v.object({
+		opportunityRef: nonEmpty('opportunityRef is required'),
+		scope: nonEmpty('scope is required'),
+		whatAgentDoes: nonEmpty('whatAgentDoes is required'),
+		aiRole: AiRole,
+		decisionClass: DecisionClass,
+		supportRefs: nonEmptyArray(
+			v.string(),
+			'a recommendation must cite at least one supporting claim or evidence id',
+		),
+		whatStaysHuman: nonEmptyArray(
+			v.string(),
+			'whatStaysHuman must list at least one human-held step',
+		),
+		boundaries: v.array(v.string()),
+		whyBounded: nonEmpty('whyBounded is required'),
+	}),
+	v.check(
+		(r) => !isProhibitedAutonomy(r),
+		'an autonomous AI part may not make an approval or publish decision; that stays with a human',
 	),
-	boundaries: v.array(v.string()),
-	whyBounded: nonEmpty('whyBounded is required'),
-});
+);
 export type Recommendation = v.InferOutput<typeof Recommendation>;
 
 /** One expected-value statement: evidence-cited, or explicitly `unquantified`. Numbers are never invented to fill it. */
@@ -192,15 +225,28 @@ export const ExpectedValue = v.object({
 });
 export type ExpectedValue = v.InferOutput<typeof ExpectedValue>;
 
+/** Where a map's evidence came from. The live Notion path cannot verify verbatim quotes, so its findings are never final. */
+export const Provenance = v.picklist(['fixture', 'live']);
+export type Provenance = v.InferOutput<typeof Provenance>;
+
+/** Whether the map's findings are final or provisional. A provisional map is pending verification a human must complete. */
+export const MapStatus = v.picklist(['final', 'provisional']);
+export type MapStatus = v.InferOutput<typeof MapStatus>;
+
 /**
- * The whole deliverable. The object-level check enforces the boundary that a
- * compliance-sensitive opportunity may only be recommended when its AI part is
+ * The whole deliverable. The first object-level check enforces the boundary that
+ * a compliance-sensitive opportunity may only be recommended when its AI part is
  * assist-only; the recommended opportunity must exist for the check to bind,
- * which the cross-reference validation in `finish_operating_map` guarantees.
+ * which the cross-reference validation in `finish_operating_map` guarantees. The
+ * second forbids a `final` status on a `live`-sourced map: live reads cannot be
+ * quote-verified, so their findings stay provisional. `provenance` and `status`
+ * are set by the run at finish, not by the model.
  */
 export const OperatingMap = v.pipe(
 	v.object({
 		objective: nonEmpty('objective is required'),
+		provenance: Provenance,
+		status: MapStatus,
 		claims: v.array(Claim),
 		steps: v.array(WorkflowStep),
 		contradictions: v.array(Contradiction),
@@ -216,6 +262,10 @@ export const OperatingMap = v.pipe(
 		if (opp === undefined) return true;
 		return !opp.complianceSensitive || map.recommendation.aiRole === 'assist-only';
 	}, 'a compliance-sensitive opportunity may only be recommended with an assist-only AI part'),
+	v.check(
+		(map) => map.provenance !== 'live' || map.status === 'provisional',
+		'a live-sourced map cannot be final; its findings are provisional until a human verifies them',
+	),
 );
 export type OperatingMap = v.InferOutput<typeof OperatingMap>;
 
@@ -295,6 +345,13 @@ export function validateCrossRefs(map: OperatingMap, isKnownId: (id: string) => 
 		problems.push(
 			`Recommendation references unknown opportunity '${map.recommendation.opportunityRef}'.`,
 		);
+	}
+	for (const r of map.recommendation.supportRefs) {
+		if (!claimIds.has(r) && !isKnownId(r)) {
+			problems.push(
+				`Recommendation cites support '${r}', which is neither a claim nor read evidence.`,
+			);
+		}
 	}
 	for (const s of map.expectedValue.statements) {
 		if (s.evidenceRef !== undefined && !claimIds.has(s.evidenceRef) && !isKnownId(s.evidenceRef)) {

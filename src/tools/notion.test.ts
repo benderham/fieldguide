@@ -25,7 +25,7 @@ describe('readDocumentRun', () => {
 
 		expect(fetchDelegate).not.toHaveBeenCalled();
 		expect(onSpend).not.toHaveBeenCalled();
-		expect(result).toContain('produce_workflow_map');
+		expect(result).toContain('finish_operating_map');
 	});
 
 	it('fetches the document, spends one step, and returns the delegate output when allowed', async () => {

@@ -1,9 +1,17 @@
 'use agent';
-import { defineTool, useModel, usePersistentState, useTool } from '@flue/runtime';
+import {
+	defineTool,
+	useAgentStart,
+	useDelivery,
+	useModel,
+	usePersistentState,
+	useTool,
+} from '@flue/runtime';
 import * as v from 'valibot';
+import { assertValidObjective } from '../domain/objective.ts';
 import type { OperatingMapDraft } from '../domain/operating-map.ts';
-import { MAX_STEPS, stepGate } from '../domain/workflow-map.ts';
-import { createOperatingMapTools, evidence, listEvidence } from '../tools/evidence.ts';
+import { MAX_STEPS, overTurnCap, stepGate, TURN_CAP } from '../domain/workflow-map.ts';
+import { createOperatingMapTools, evidence } from '../tools/evidence.ts';
 import { notionEnabled, notionTools } from '../tools/notion.ts';
 // Registers a Fireworks provider whose catalog includes the pinned model below.
 // Side-effect import; `flue run` loads only this agent module.
@@ -20,24 +28,74 @@ function verifyFixtureQuote(evidenceId: string, quote: string): boolean {
 
 export function Fieldguide() {
 	useModel('fireworks/accounts/fireworks/models/deepseek-v4-flash-0731');
+
+	// Validate the submitted objective at the intake seam: a throw here fails the
+	// submission before the first model turn. Signals carry no human input, so
+	// only user deliveries are checked.
+	const delivery = useDelivery();
+	useAgentStart(() => {
+		if (delivery.kind === 'user') assertValidObjective(delivery.body);
+	});
+
 	const [stepsUsed, setStepsUsed] = usePersistentState('stepsUsed', 0);
+	const [turnsUsed, setTurnsUsed] = usePersistentState('turnsUsed', 0);
 	const [readIds, setReadIds] = usePersistentState<string[]>('readIds', []);
 	const [draft, setDraft] = usePersistentState<OperatingMapDraft>('operatingMap', {});
 
 	const spend = () => setStepsUsed((previous) => previous + 1);
+	const spendTurn = () => setTurnsUsed((previous) => previous + 1);
 	const recordRead = (id: string) =>
 		setReadIds((previous) => (previous.includes(id) ? previous : [...previous, id]));
 
 	// A Notion credential switches the agent onto the live workspace; without one
 	// it runs against the local fixtures, which is how the evals exercise the loop.
 	const liveNotion = notionEnabled();
+	const provenance = liveNotion ? 'live' : 'fixture';
+
+	// getState seeds the tools' in-turn mirror from the durable draft; patch writes
+	// back durably. The mirror lets finish and the progress messages see sections
+	// recorded earlier in the same turn, which the captured snapshot alone would miss.
+	const operatingMap = createOperatingMapTools({
+		isKnownId: (id) => readIds.includes(id),
+		getState: () => draft,
+		patch: (partial) => setDraft((previous) => ({ ...previous, ...partial })),
+		provenance,
+		spendTurn,
+		verifyQuote: liveNotion ? undefined : verifyFixtureQuote,
+	});
+
+	// Flue has no runtime turn bound, so the turn cap is enforced by the tool
+	// surface: once the budget is spent the only tool offered is finish_incomplete,
+	// which saves a provisional partial map and ends the run. See docs/decisions.md.
+	if (overTurnCap(turnsUsed)) {
+		useTool(operatingMap.finishIncomplete);
+		return [
+			`You have reached the turn budget of ${TURN_CAP}. Stop recording.`,
+			'Call finish_incomplete now to save a provisional map from what you have.',
+		].join('\n');
+	}
 
 	if (liveNotion) {
-		const { searchDocuments, readDocument } = notionTools({ stepsUsed, spend, onRead: recordRead });
+		const { searchDocuments, readDocument } = notionTools({
+			stepsUsed,
+			spend,
+			spendTurn,
+			onRead: recordRead,
+		});
 		useTool(searchDocuments);
 		useTool(readDocument);
 	} else {
-		useTool(listEvidence);
+		useTool(
+			defineTool({
+				name: 'list_evidence',
+				description:
+					'List every available evidence excerpt as id and title. Use it to decide what to read next.',
+				async run() {
+					spendTurn();
+					return { output: evidence.map(({ id, title }) => ({ id, title })) };
+				},
+			}),
+		);
 		useTool(
 			defineTool({
 				name: 'read_evidence',
@@ -45,6 +103,7 @@ export function Fieldguide() {
 					'Read the full text of one evidence excerpt by id. Each successful call is one investigative step and counts against the step budget. Read one excerpt at a time, then decide the next.',
 				input: v.object({ id: v.string() }),
 				async run({ data }) {
+					spendTurn();
 					const gate = stepGate(stepsUsed);
 					if (!gate.allowed) return gate.message;
 					const excerpt = evidence.find((item) => item.id === data.id);
@@ -59,15 +118,6 @@ export function Fieldguide() {
 		);
 	}
 
-	// getState seeds the tools' in-turn mirror from the durable draft; patch writes
-	// back durably. The mirror lets finish and the progress messages see sections
-	// recorded earlier in the same turn, which the captured snapshot alone would miss.
-	const operatingMap = createOperatingMapTools({
-		isKnownId: (id) => readIds.includes(id),
-		getState: () => draft,
-		patch: (partial) => setDraft((previous) => ({ ...previous, ...partial })),
-		verifyQuote: liveNotion ? undefined : verifyFixtureQuote,
-	});
 	for (const tool of operatingMap.all) useTool(tool);
 
 	const intro = [
@@ -100,6 +150,8 @@ export function Fieldguide() {
 		`You have a budget of ${MAX_STEPS} reads. You have used ${stepsUsed}.`,
 		'Spend them on the documents most likely to reveal the workflow. When the budget',
 		'runs out you will be told to stop reading and record from what you have.',
+		`You also have ${TURN_CAP} turns in all (used ${turnsUsed}); past that you can only`,
+		'save a provisional partial map, so record efficiently and finish.',
 		'',
 	];
 
@@ -125,7 +177,9 @@ export function Fieldguide() {
 		'- record_responsibility: who owns each step now and who should. An agent target',
 		'  needs a rationale naming the friction it solves.',
 		'- record_opportunities: ranked improvements, scored on impact, effort, reversibility.',
-		'- record_recommendation: one thin-slice workflow to try.',
+		'- record_recommendation: one thin-slice workflow to try. Set decisionClass to',
+		'  advisory, approval, or publish; an autonomous aiRole may never be approval or',
+		'  publish. Cite the claims or evidence that justify it in supportRefs.',
 		'- record_value: expected value and assumptions.',
 		'Finish by calling finish_operating_map on its own, after the last record call.',
 		'',

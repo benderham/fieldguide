@@ -1,14 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import type { OperatingMap, OperatingMapDraft } from '../domain/operating-map.ts';
-import { createOperatingMapTools, evidence, listEvidence } from './evidence.ts';
+import {
+	createOperatingMapTools,
+	evidence,
+	type IncompleteOperatingMap,
+	listEvidence,
+} from './evidence.ts';
 
 // The tools only read `data`; the rest of the run() context is not exercised here.
 const ctx = <T>(data: T) => ({ data }) as never;
 
 /** A live in-memory stand-in for the agent's persistent draft, so tool writes accumulate across calls. */
-function harness(isKnownId: (id: string) => boolean = () => true) {
+function harness(
+	isKnownId: (id: string) => boolean = () => true,
+	provenance: 'fixture' | 'live' = 'fixture',
+) {
 	let state: OperatingMapDraft = {};
 	let saved: OperatingMap | undefined;
+	let savedIncomplete: IncompleteOperatingMap | undefined;
+	let turns = 0;
 	const tools = createOperatingMapTools({
 		isKnownId,
 		getState: () => state,
@@ -18,8 +28,21 @@ function harness(isKnownId: (id: string) => boolean = () => true) {
 		save: (map) => {
 			saved = map;
 		},
+		saveIncomplete: (map) => {
+			savedIncomplete = map;
+		},
+		provenance,
+		spendTurn: () => {
+			turns += 1;
+		},
 	});
-	return { tools, getState: () => state, getSaved: () => saved };
+	return {
+		tools,
+		getState: () => state,
+		getSaved: () => saved,
+		getSavedIncomplete: () => savedIncomplete,
+		getTurns: () => turns,
+	};
 }
 
 /** Record every section of a complete, self-consistent map through the tools. */
@@ -133,6 +156,8 @@ async function recordFullMap(tools: ReturnType<typeof harness>['tools']) {
 				scope: 'financial',
 				whatAgentDoes: 'warns editor',
 				aiRole: 'assist-only',
+				decisionClass: 'advisory',
+				supportRefs: ['c1'],
 				whatStaysHuman: ['sign-off'],
 				boundaries: ['never approves'],
 				whyBounded: 'irreversible publish',
@@ -199,6 +224,60 @@ describe('finish_operating_map', () => {
 	});
 });
 
+describe('provenance and status stamping', () => {
+	it('stamps a fixture run final', async () => {
+		const h = harness(() => true, 'fixture');
+		await recordFullMap(h.tools);
+		const result = (await h.tools.finish.run(ctx({}))) as { output: { map: OperatingMap } };
+		expect(result.output.map.provenance).toBe('fixture');
+		expect(result.output.map.status).toBe('final');
+	});
+
+	it('stamps a live run provisional, never final', async () => {
+		const h = harness(() => true, 'live');
+		await recordFullMap(h.tools);
+		const result = (await h.tools.finish.run(ctx({}))) as { output: { map: OperatingMap } };
+		expect(result.output.map.provenance).toBe('live');
+		expect(result.output.map.status).toBe('provisional');
+	});
+});
+
+describe('finish_incomplete', () => {
+	it('saves a provisional partial map and terminates', async () => {
+		const h = harness();
+		await h.tools.recordClaims.run(
+			ctx({
+				claims: [
+					{
+						claimId: 'c1',
+						type: 'system-fact',
+						quote: 'WirePush has no integration',
+						evidenceId: 'system-distribution',
+					},
+				],
+			}),
+		);
+		const result = (await h.tools.finishIncomplete.run(ctx({}))) as {
+			output: { map: IncompleteOperatingMap };
+			terminate: boolean;
+		};
+		expect(result.terminate).toBe(true);
+		const saved = h.getSavedIncomplete();
+		expect(saved?.incomplete).toBe(true);
+		expect(saved?.status).toBe('provisional');
+		expect(saved?.draft.claims).toHaveLength(1);
+		expect(saved?.draft.recommendation).toBeUndefined();
+	});
+});
+
+describe('turn counting', () => {
+	it('counts one turn per record call', async () => {
+		const h = harness();
+		await recordFullMap(h.tools);
+		expect(h.getTurns()).toBe(9);
+	});
+});
+
 describe('record_claims evidence guard', () => {
 	it('rejects a claim citing evidence the run did not read', async () => {
 		const h = harness((id) => id === 'procedure-approvals');
@@ -250,6 +329,8 @@ describe('finish cross-reference checks', () => {
 					scope: 'financial',
 					whatAgentDoes: 'approves automatically',
 					aiRole: 'autonomous',
+					decisionClass: 'advisory',
+					supportRefs: ['c1'],
 					whatStaysHuman: ['nothing really'],
 					boundaries: [],
 					whyBounded: 'n/a',

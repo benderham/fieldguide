@@ -14,6 +14,8 @@ const KNOWN = new Set([
 function goodMap(): OperatingMap {
 	return {
 		objective: 'Audit approvals',
+		provenance: 'fixture',
+		status: 'final',
 		claims: [
 			{
 				claimId: 'c1',
@@ -113,6 +115,8 @@ function goodMap(): OperatingMap {
 			scope: 'financial',
 			whatAgentDoes: 'warns editor',
 			aiRole: 'assist-only',
+			decisionClass: 'advisory',
+			supportRefs: ['c1'],
 			whatStaysHuman: ['sign-off'],
 			boundaries: ['never approves'],
 			whyBounded: 'irreversible publish',

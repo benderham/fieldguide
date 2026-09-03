@@ -108,3 +108,37 @@ The deciding constraint: a Flue-mounted MCP tool executes only when the model ca
 Scope is fixtures-only; live-Notion parity is deferred to a later entry. The pinned model (`deepseek-v4-flash-0731`) is held; a bump, if the behavioural rate forces it, is its own entry.
 
 **Consequences.** The boundaries now hold by construction: the failure modes the assignment names (an uncited finding, a silently resolved contradiction, an interview treated as fact, an unbounded AI recommendation, AI proposed for a step with no friction behind it) are unrepresentable or rejected, not merely discouraged. The cost is a much larger schema and ten tools where there was one, and a longer agent loop: a full run makes a dozen-plus tool calls over many turns, which the pinned small model can do but slowly. Because Flue re-renders the agent each turn, the section tools keep an in-turn mirror of the draft so `finish` and the progress messages see sections recorded earlier in the same turn, which the turn-start persistent snapshot alone would miss; the durable write still goes through Flue state. Cross-object boundaries (compliance-sensitive recommendation, agent-target rationale resolving to a real friction) can only be checked once the whole object exists, so they live in the whole-map check and in `finish`, not in the per-section tools.
+
+---
+
+## ADR-0008 — Harden the audit boundary: validate input, cap turns, gate outputs structurally
+
+**Status:** ACCEPTED · 2026-09-03
+
+**Context.** The operating map (ADR-0007) enforced the five copilot boundaries, but three surfaces around it were unguarded. The submitted audit objective reached the model with no validation. The run had a read budget (`MAX_STEPS`) but no bound on total turns, so a model that never finished could loop indefinitely (Flue exposes no runtime turn cap). And the requirement that "unsupported conclusions and prohibited autonomous approval recommendations cannot become final findings" was only partly met: claims and value statements had to cite read evidence, but a recommendation carried no support link and no way to name the kind of decision it made.
+
+**Decision.** Four guards, each structural rather than a prompt instruction.
+
+1. **Validate the objective at the intake seam.** `AuditObjective` (`src/domain/objective.ts`) is a valibot schema: non-empty after trim, at most 2000 characters, at least three readable characters. The agent reads the delivery with `useDelivery()` and validates it inside `useAgentStart()`, whose throw fails the submission before the first model turn. A bad objective is rejected naming the failed rule, never coerced.
+
+2. **Cap total turns at twelve.** `TURN_CAP` (`src/domain/workflow-map.ts`) bounds tool-calling turns, separate from the four-read budget. Each tool run increments a durable `turnsUsed`; because Flue renders are pure reads, the count is flipped inside tools, not in render. Past the cap the render offers only `finish_incomplete`: the tool surface is the enforcement, since Flue has no runtime turn bound. `finish_incomplete` saves whatever sections exist as a provisional, incomplete map (`data/last-operating-map.incomplete.json`, kept apart from the finished artifact) and ends the run, so a capped run does not discard its reads.
+
+3. **A recommendation must cite its support.** `Recommendation.supportRefs` requires at least one claim id or read-evidence id, resolved by `validateCrossRefs`. A recommendation with no support cannot pass `finish`, so an unsupported conclusion cannot become a final finding.
+
+4. **An autonomous AI part may not approve or publish.** `Recommendation.decisionClass` (advisory, approval, publish) names the decision; an entry-level check rejects `autonomous` aiRole paired with an approval or publish class. This is the specific prohibited finding the SignalWire requirement names, now unrepresentable in a valid map.
+
+Output filtering stays structural: the schema and the finish-time cross-reference check are the filter. No semantic classifier scans free-text fields, and none is added; a model self-judging its own prose is the "prompt hope" ADR-0007 rejects. The residual gap this leaves is a recommendation citing a real, read evidence id that does not actually support it, a resolving non-sequitur, catchable only by judgement. On the fixtures path it is unaddressed; on the live path it is moot because every live finding is provisional (ADR-0009).
+
+**Consequences.** The three named failures (an unvalidated objective, an unbounded run, an unsupported or autonomous-approval recommendation) are rejected by construction, at the intake seam, the tool surface, or the schema. The turn cap is best-effort in one narrow sense: a model that emits only free text, calling no tool, ends its response without saving, which the cap cannot prevent; it can only bound tool-calling work, which is the runaway that mattered. Every existing map fixture gained `provenance`, `status`, `decisionClass`, and `supportRefs`, a mechanical but wide change across tests.
+
+---
+
+## ADR-0009 — A live-sourced map is provisional, never final
+
+**Status:** ACCEPTED · 2026-09-03
+
+**Context.** On the fixtures path a claim's quote is verified as a verbatim span of the cited document. On the live-Notion path the read bodies are not retained (ADR-0007), so quotes cannot be verified: a live map's citations are unchecked. Yet nothing distinguished a verified fixture map from an unverified live one; both looked equally final.
+
+**Decision.** The map carries its origin and its standing. `provenance` (fixture or live) and `status` (final or provisional) are set by the run at `finish`, not by the model, so neither can be spoofed. A whole-object check forbids a `final` status on a `live`-sourced map. The run stamps a live map provisional; the report renders a provisional banner ahead of the findings.
+
+**Consequences.** A live-path finding announces that it is pending human verification, which is honest given the unverifiable quotes. The distinction is coarse: it marks the whole map provisional rather than the individual unverifiable spans, and it does not itself add the verification step. When the live path retains bodies and can verify spans, a later entry can let a verified live map be final.
