@@ -229,3 +229,56 @@ describe('expected-value guard', () => {
 		expect(() => v.parse(OperatingMap, map)).toThrow();
 	});
 });
+
+describe('inference may describe, never support', () => {
+	/** Add an inference claim, which is the agent's own reasoning rather than a finding in the evidence. */
+	function withInference(map: OperatingMapType): OperatingMapType {
+		map.claims.push({
+			claimId: 'i1',
+			type: 'inference',
+			quote: 'MUST receive written compliance sign-off before distribution',
+			evidenceId: 'procedure-approvals',
+		});
+		return map;
+	}
+
+	// Everything the run read: the documents behind its claims, plus the thread its
+	// value statement cites.
+	const knownIds = (map: OperatingMapType) => (id: string) =>
+		map.claims.some((c) => c.evidenceId === id) || id === 'submission-thread-4821';
+
+	it("rejects a recommendation supported only by the agent's own reasoning", () => {
+		const map = withInference(validMap());
+		map.recommendation.supportRefs = ['i1'];
+		const problems = validateCrossRefs(map, knownIds(map));
+		expect(problems.some((p) => p.includes('inference alone is not support'))).toBe(true);
+	});
+
+	it('accepts an inference alongside an evidenced claim', () => {
+		const map = withInference(validMap());
+		map.recommendation.supportRefs = ['i1', 'c1'];
+		expect(validateCrossRefs(map, knownIds(map))).toEqual([]);
+	});
+
+	it('rejects a value statement citing an inference as its evidence', () => {
+		const map = withInference(validMap());
+		map.expectedValue.statements[1].evidenceRef = 'i1';
+		map.expectedValue.statements[1].unquantified = false;
+		const problems = validateCrossRefs(map, knownIds(map));
+		expect(problems.some((p) => p.includes('cites inference'))).toBe(true);
+	});
+
+	it('rejects a contradiction that pits an inference against a document', () => {
+		const map = withInference(validMap());
+		map.contradictions[0].claimRefs = ['c1', 'i1'];
+		const problems = validateCrossRefs(map, knownIds(map));
+		expect(problems.some((p) => p.includes('at least two evidenced claims'))).toBe(true);
+	});
+
+	it('still allows an inference to describe a step or a friction', () => {
+		const map = withInference(validMap());
+		map.steps[0].claimRefs = ['c1', 'c2', 'i1'];
+		map.frictions[0].claimRefs = ['c1', 'i1'];
+		expect(validateCrossRefs(map, knownIds(map))).toEqual([]);
+	});
+});

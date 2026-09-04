@@ -309,9 +309,22 @@ export function validateCrossRefs(map: OperatingMap, isKnownId: (id: string) => 
 		if (s.observed !== undefined) claimRef(s.observed, `Step ${s.seq} observed`);
 		for (const r of s.claimRefs) claimRef(r, `Step ${s.seq}`);
 	}
+	const inferenceIds = new Set(
+		map.claims.filter((c) => c.type === 'inference').map((c) => c.claimId),
+	);
 	for (const [i, x] of map.contradictions.entries()) {
 		if (x.claimRefs.length < 2) {
 			problems.push(`Contradiction ${i + 1} ('${x.topic}') must reference at least two claims.`);
+		}
+		// A conflict between an inference and a document is the copilot disagreeing
+		// with the evidence, not two accounts of the work disagreeing with each
+		// other. Recording it as a contradiction would put the agent's own reasoning
+		// on the same footing as the client's records.
+		const evidenced = x.claimRefs.filter((r) => claimIds.has(r) && !inferenceIds.has(r));
+		if (evidenced.length < 2) {
+			problems.push(
+				`Contradiction ${i + 1} ('${x.topic}') must hold at least two evidenced claims in conflict; an inference cannot be one side of it.`,
+			);
 		}
 		for (const r of x.claimRefs) claimRef(r, `Contradiction '${x.topic}'`);
 	}
@@ -344,6 +357,13 @@ export function validateCrossRefs(map: OperatingMap, isKnownId: (id: string) => 
 		if (s.evidenceRef !== undefined && !claimIds.has(s.evidenceRef) && !isKnownId(s.evidenceRef)) {
 			problems.push(
 				`Value statement cites '${s.evidenceRef}', which is neither a claim nor read evidence.`,
+			);
+		}
+		// A value resting on the agent's own reasoning is an invented number wearing
+		// a citation. Say it is unquantified instead.
+		if (s.evidenceRef !== undefined && inferenceIds.has(s.evidenceRef)) {
+			problems.push(
+				`Value statement cites inference '${s.evidenceRef}' as its evidence. Cite evidence, or mark the statement unquantified.`,
 			);
 		}
 	}
@@ -381,12 +401,25 @@ export function recommendationProblems(
 			'a compliance-sensitive opportunity may only be recommended with an assist-only AI part',
 		);
 	}
+	const inferenceIds = new Set(claims.filter((c) => c.type === 'inference').map((c) => c.claimId));
+	let evidencedSupport = 0;
 	for (const r of recommendation.supportRefs) {
 		if (!claimIds.has(r) && !isKnownId(r)) {
 			problems.push(
 				`Recommendation cites support '${r}', which is neither a claim nor read evidence.`,
 			);
+			continue;
 		}
+		if (!inferenceIds.has(r)) evidencedSupport += 1;
+	}
+	// Inference may describe, never support. An inference claim is the agent's own
+	// reasoning; letting it stand as the support under a recommendation would make
+	// "unsupported conclusions cannot become final findings" mean reasoning-backed
+	// rather than evidence-backed, which is the residual gap ADR-0008 named.
+	if (recommendation.supportRefs.length > 0 && evidencedSupport === 0) {
+		problems.push(
+			'a recommendation must rest on at least one evidenced claim or read document; inference alone is not support',
+		);
 	}
 	return problems;
 }
