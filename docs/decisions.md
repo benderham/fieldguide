@@ -65,7 +65,7 @@ The deciding constraint: a Flue-mounted MCP tool executes only when the model ca
 
 ## ADR-0005 — Workflow-map citations are validated against documents actually read
 
-**Status:** AMENDED (by ADR-0007) · 2026-09-02
+**Status:** AMENDED (by ADR-0007, ADR-0010) · 2026-09-02
 
 **Context.** Each step in the produced workflow map cites the document it came from, so a reviewer can trace it. A citation is only meaningful if it points at a document the agent actually opened during the run.
 
@@ -142,3 +142,46 @@ Output filtering stays structural: the schema and the finish-time cross-referenc
 **Decision.** The map carries its origin and its standing. `provenance` (fixture or live) and `status` (final or provisional) are set by the run at `finish`, not by the model, so neither can be spoofed. A whole-object check forbids a `final` status on a `live`-sourced map. The run stamps a live map provisional; the report renders a provisional banner ahead of the findings.
 
 **Consequences.** A live-path finding announces that it is pending human verification, which is honest given the unverifiable quotes. The distinction is coarse: it marks the whole map provisional rather than the individual unverifiable spans, and it does not itself add the verification step. When the live path retains bodies and can verify spans, a later entry can let a verified live map be final.
+
+---
+
+## ADR-0010 — Retention: evidence and unresolved questions survive a run; conclusions do not
+
+**Status:** ACCEPTED · 2026-09-04
+
+**Context.** Everything the agent produced was retained the same way and for the same duration. Flue's durable state held the budgets, the read set and the in-progress draft, keyed to a conversation and never reset; `data/last-operating-map.json` held the deliverable, overwritten every run so an audit's history was one file deep. Nothing distinguished a record that must outlive the run from reasoning that should die with it, nothing said why any of it was kept, and nothing stopped a second run inheriting the first run's prose along with its findings.
+
+The shape of the problem is the copilot's own: an audit is not one sitting. It escalates a question, a human answers, work resumes. That only works if the right things survive — and only stays honest if the wrong things do not.
+
+**Decision.** Retention is split by what a record *is*, and every retained item states why it is kept.
+
+1. **Two identities: the audit and the run.** An *audit* is a durable investigation, founded explicitly (`npm run audit -- new`) and living in its own store (`data/audit.db`, `src/store/audit.ts`). A *run* is one bounded pass over it: a fresh Flue instance with a fresh conversation id, its own read and turn budgets, and an empty transcript. `initialData` carries the `auditId`, validated at admission, and a run against an audit the store does not hold fails before the first model turn — a mistyped id cannot quietly found a second investigation.
+
+   A fresh instance per run is not a preference. Flue's durable state never resets (there is no unset; a name once written always has a value), and its conversation record is append-only with no pruning API, so one instance per audit would put the previous run's reasoning in the next run's context on turn one, unremovably. There is no fork, clone or cross-instance state API anywhere in Flue: a fresh id *cannot* inherit a transcript. The rule that a resumed audit rehydrates only from canonical records is therefore unimplementable to violate, rather than a discipline.
+
+2. **Three retention scopes.** `run` — discarded with the run: budgets, the in-progress draft. `audit` — accumulates as canonical state a later run may rest findings on: claims, the read set, open questions, contradictions. `history` — retained but never an input: each run's conclusions, and Flue's transcript.
+
+   Only evidence and unresolved questions accumulate, because only those stay true after the run that found them. The six conclusion sections (steps, frictions, responsibility, opportunities, recommendation, expected value) are an interpretation reached under one objective with one budget; they are saved as immutable per-run snapshots that supersede without merging, and are never seeded back. A resumed audit re-derives its map from the evidence rather than inheriting the story someone told about it last time.
+
+3. **The registry, not the prose, is the policy.** `src/domain/retention.ts` names every retained item with a scope and a written reason. Every durable write path resolves its entry first and throws when there is none, and a test reads the agent source to assert every `usePersistentState` key is registered. A policy that lives only in a document is a docs hope — the documentation analogue of the prompt hopes ADR-0007 replaced. The manifest ships in every run's envelope and renders as a report footer, so a reviewer sees what was kept, at which scope, and why. It includes the transcript store, which is the largest thing kept and the easiest to omit: retained indefinitely, non-canonical, never read back, and on real client evidence in need of a deletion policy the framework cannot currently provide.
+
+4. **One promotion seam, with one deliberate exception.** A finish tool is the only place a run's work crosses into the record (`src/store/persist.ts`): everything crossing has passed the section guards and, for a complete map, the whole-object and cross-reference checks. The exception is reads, which write through as they happen — opening a document is an event that occurred, not a judgement awaiting validation, so a run that crashes still leaves the audit knowing what was looked at. An incomplete run accumulates its evidence and questions exactly as a complete one does; running out of turns does not make a claim less true.
+
+5. **Content-addressed identity.** Model-supplied ids are run-local, so a claim is identified by the span it quotes (`src/domain/identity.ts`), a question by its text, a contradiction by the claims it holds in conflict. Accumulation is idempotent, corroboration is visible as several runs sighting one claim, and the normalisation is versioned because changing it would silently re-identify history. The accumulating types are all commutative — a set of reads, a hashed register — so concurrent runs of one audit converge; the only symptom is a stale seed, which is why no lease is taken.
+
+6. **A human answer is evidence.** An answered question names the document the answer arrived as (`npm run audit -- answer`), and the store owns question status, never the model. The answer is seeded prominently but is not free: a run must read it before anything may rest on it, so the citation guarantee holds for a human's decision exactly as for a policy document. An answer is staff recollection, not fact.
+
+7. **An inference may describe, never support.** The `inference` claim type is the model's own reasoning inside the canonical register. It may appear in a step's or a friction's refs, where it is informative; it may not be the support under a recommendation, the evidence behind a value statement, or a side of a contradiction. Three whole-object checks enforce it. This closes the specific vector of the residual gap ADR-0008 named: without it, "unsupported conclusions cannot become final findings" meant reasoning-backed rather than evidence-backed.
+
+8. **What is deliberately not enforced.** Audit identity is a human assertion: each run stamps its own objective beside the audit's founding one, so drift is auditable after the fact, but nothing rejects a divergent objective — that would need a model judging text, which is the prompt hope ADR-0007 rejects. There is no audit-level budget; a human starts each run, which bounds it better than a number, and the cumulative counts are recorded so the decision can be revisited on evidence. Seeding is whole or not at all: past a registered cap the run refuses to start rather than seed a partial register the model would believe was complete. Retrieval over a large register is the successor to that cap, deferred.
+
+Two things changed during implementation, against the design as reasoned:
+
+- The audit's canonical state was to be mirrored into run-scoped durable state so the citation guards could stay synchronous. It cannot be: the render that declares the hooks runs *before* the intake seam, and Flue recomputes the prompt and tools only after a turn completes, so a mirror written at intake is invisible exactly when the first turn's tools run. The prohibition on store I/O only ever applied to renders, and the store is synchronous, so tools read it directly through a per-run cache in process memory (`src/store/run-context.ts`). Nothing durable is duplicated and the guards stay pure functions over data.
+- The scope was to be two values, `run` and `audit`, with `audit` meaning canonical. A snapshot broke that: it survives the run but must never be something a later run rests on. `history` is the third value, so scope alone still carries the meaning.
+
+**Consequences.** An audit can now be worked in several sittings, with escalation that actually returns. What survives is evidence and unresolved questions; what does not survive is conclusion — the run's reasoning product, kept as history but never promoted to something a later run treats as established. The transcript still holds every reasoning delta, forever, and that is now stated rather than unexamined.
+
+The costs are real. Running the agent takes two steps where it took one, since an audit must be founded before a run. `data/last-operating-map.json` is gone, so anything reading it must move to `data/audits/<auditId>/<runId>.json`, where the map sits inside an envelope. The audit id is a free-form string a human passes, and the founding step is what keeps a typo from being silent. And the wiring is proven by the type checker and by unit tests of every piece; the first end-to-end proof is the gated resumption eval, which is the one thing here a deterministic test cannot reach.
+
+**Amends ADR-0005.** Its citation guarantee widens from "a document this run read" to "a document this audit has read". A resumed run may cite what an earlier run opened without spending a read on it again. On the fixtures path this stays airtight, because a quote is verified as a verbatim span of the document independently of who read it. On the live path read bodies are not retained, so an inherited citation is unverifiable and the document may have changed since — which ADR-0009 already covers by stamping every live map provisional. When the live path retains bodies, re-verification hooks in here.

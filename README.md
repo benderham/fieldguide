@@ -81,6 +81,8 @@ The initial implementation will use:
 
 The runtime transcript is not the business record. Flue owns model turns and tool execution history; Fieldguide owns evidence, contradictions, workflow steps, audit status, and human decisions.
 
+What survives a run is deliberate and narrow. Evidence and unresolved questions accumulate into the audit, because they stay true after the run that found them ends. A run's conclusions are kept as immutable history and never fed back, so a resumed audit re-derives its map from the evidence rather than inheriting an earlier run's story. Everything retained carries a written reason, checked at the write site rather than asserted in a document, and that manifest ships with every map.
+
 The architecture may change as the experiment exposes better boundaries. Those changes—and the evidence behind them—are part of the case study.
 
 ## Evaluation principles
@@ -121,23 +123,38 @@ Fieldguide reaches evidence through two search-and-read tools whose choice the m
 - **Live Notion** — set `NOTION_TOKEN` (a Notion integration token; optionally `NOTION_API_URL` to point at a proxy). The agent calls the Notion REST API and exposes `search_documents` (natural-language search, free) and `read_document` (fetch one document's text, costs one step). REST rather than MCP because the read has to be gated against the step budget, and Flue runs MCP tools only when the model calls them directly. This is the production path.
 - **Fixtures** — with no `NOTION_TOKEN`, the agent falls back to the local `evidence/*.md` corpus via `list_evidence` and `read_evidence`. This keeps the evals deterministic and offline.
 
-Both paths share one read budget (`MAX_STEPS`) and one turn budget (`TURN_CAP`); past the turn budget the run can only save a provisional partial map via `finish_incomplete`. `finish_operating_map` accepts only citations to documents the run actually read, and a live-sourced map is always stamped provisional.
+Both paths share one read budget (`MAX_STEPS`) and one turn budget (`TURN_CAP`); past the turn budget the run can only save a provisional partial map via `finish_incomplete`. `finish_operating_map` accepts only citations to documents the audit actually read — this run or an earlier one — and a live-sourced map is always stamped provisional.
 
 ```sh
 NOTION_TOKEN="..."
 ```
 
-### Talk to the agent
+### Run an audit
+
+An audit is the durable investigation; a run is one bounded pass over it. Found the audit first:
 
 ```sh
-npx flue run src/agents/fieldguide.ts --message "Say hello in five words or fewer."
+npm run audit -- new --id audit-1 --objective "Audit how SignalWire approves and distributes press releases"
 ```
 
-Conversations are durable, stored via the SQLite adapter in `src/db.ts`. Pass `--id <id>` to continue an existing one:
+Then run against it. Each run is a fresh conversation with its own read and turn budgets, so give it a new `--id` every time and name the audit in `--data`:
 
 ```sh
-npx flue run src/agents/fieldguide.ts --id audit-1 --message "What evidence should we review first?"
+npx flue run src/agents/fieldguide.ts --new --id audit-1-run-1 \
+  --data '{"auditId":"audit-1"}' \
+  --message "Audit how SignalWire approves and distributes press releases"
 ```
+
+The run writes `data/audits/audit-1/audit-1-run-1.json`: the operating map, wrapped in the record of the run that produced it and what it retained. A run against an audit that was never founded fails before the first model turn.
+
+Between runs, a person answers what the copilot escalated. An answer is evidence: it names a document, and the next run must read it before citing it.
+
+```sh
+npm run audit -- show --id audit-1
+npm run audit -- answer --id audit-1 --question "Who signs off a compliance exception?" --evidence procedure-approvals
+```
+
+`npm run audit -- retention` prints everything the system keeps and why.
 
 Typecheck with `npm run check:types`.
 

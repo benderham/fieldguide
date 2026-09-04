@@ -4,6 +4,22 @@ Plain-language updates for anyone following Fieldguide. Newest first. No jargon,
 
 ---
 
+## An audit can be picked up where it was left
+
+Until now, every time Fieldguide looked at a workflow it started from nothing. It read what it could, produced its map, and forgot everything. That was fine while the point was proving it could do the work at all, but it made one of its most important habits pointless. Fieldguide is built never to decide things a person should decide: when it hits a compliance question, or an account of the work that only a human can settle, it hands the question over rather than guessing. Handing a question over is meaningless if nobody can hand back an answer, and there is nothing left to hand it back to.
+
+So an investigation is now a thing that lasts, and a single sitting is just one pass over it. What carries from one pass to the next is deliberately narrow: the evidence gathered, the documents opened, the questions still unanswered, and the disagreements nobody has settled. Those keep for a simple reason — they stay true. A sentence quoted from a policy is still in that policy tomorrow.
+
+What does not carry over is Fieldguide's own thinking. Its conclusions from a previous pass — the risks it named, the improvement it recommended, what it thought the change was worth — are kept as a record of what it concluded that day, and are never fed back to it. When work resumes, it sees the evidence again and has to reach its own view, rather than being handed last week's story and asked to nod along. The same goes for its working notes: the model's own reasoning is kept so we can see how it arrived at a bad answer, but it is never treated as something the next pass can build on. Reasoning is how you get to a finding; it is not itself a finding.
+
+That distinction turned out to have a sharper edge than expected. Fieldguide was already allowed to label some of its statements as its own inference rather than as something a document said — an honest label, and useful. But nothing stopped it then leaning on that inference as the support for its recommendation, or as the evidence behind a number, which is a neat way of quoting yourself as your own source. It can still use an inference to describe how a step works. It can no longer use one to hold up a conclusion.
+
+A person answering a question now does so by pointing at a document, and Fieldguide has to actually open and read it before anything can rest on it. An answer gets no more trust than a policy or an interview does; it is somebody's account, filed as such. And every single thing the system keeps now has to say, in writing, why it is worth keeping. That includes the least flattering item on the list: the full transcript of everything the model ever thought, which is kept indefinitely, is never treated as fact, and would need a proper deletion policy the day this runs on a real client's material.
+
+Still ahead: proving all of this against the live workspace, and seeing whether a second pass genuinely spends its effort on what is still open rather than re-reading what it already knows.
+
+---
+
 ## Fieldguide produces the full operating map
 
 Fieldguide's first version handed back a single thing: a sketch of the steps in a workflow, each pointing at the document it came from. Useful, but only a small part of what the job asks for. The job asks for eight things: the map of how the work happens now; a register of the evidence and, kept separate, the places where accounts disagree; the questions a person still needs to answer; where the work is risky or painful; who should own each step, whether a person, plain software, or an assistant; a ranked list of improvements worth trying; one small, safe change to try first; and an honest account of what it is worth, with its assumptions labelled as assumptions. Fieldguide now produces all eight.

@@ -21,6 +21,30 @@ _Avoid_: Draft, complete (those describe how much is filled, not whether it is v
 **Incomplete map**:
 A partial map saved when the turn budget runs out before every section is recorded. Always provisional.
 
+### The investigation
+
+**Audit**:
+The durable investigation an operating map is built for. Founded explicitly, identified by an id a human supplies, and the owner of everything that outlives a single pass: the evidence register, the read set, open questions, contradictions.
+_Avoid_: Session, conversation (both name Flue mechanics, not the investigation).
+
+**Run**:
+One bounded pass over an audit: a fresh agent instance with its own read and turn budgets and an empty transcript. An audit may take several.
+_Avoid_: Attempt, pass (a run is the unit budgets are counted against).
+
+**Canonical record**:
+Something the audit keeps because it stays true after the run that found it ends: a claim, a read, an open question, a contradiction. Only canonical records are seeded into a later run.
+
+**Snapshot**:
+One run's conclusions, kept immutably as history. A later run's snapshot supersedes an earlier one; snapshots are never merged and never seeded back, so conclusions are re-derived from evidence rather than inherited.
+_Avoid_: Version, revision (a snapshot is not an edit of the one before it).
+
+**Retention scope**:
+How long a retained item lives and what a later run may do with it: `run` (discarded with the run), `audit` (accumulates as canonical state), `history` (kept, never an input). Every retained item carries one, plus a written reason.
+
+**Human answer**:
+The document a person's answer to an open question arrives as. It is evidence like any other: a run must read it before citing it, and it is staff recollection, not fact.
+_Avoid_: Response, resolution (an answer settles the question, it does not adjudicate the evidence).
+
 ### Evidence
 
 **Claim**:
