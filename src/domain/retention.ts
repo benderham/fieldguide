@@ -49,12 +49,6 @@ const entries = [
 			'Tool-calling turns spent by this run, against the turn cap (ADR-0008). Run-scoped for the same reason as the read budget: a resumed audit gets a whole run, not the remainder of an earlier one.',
 	},
 	{
-		key: 'readIds',
-		scope: 'run',
-		reason:
-			'The documents this run opened, held in run state so the citation guards stay synchronous. Each read is written through to the audit read set as it happens, so this copy is a working set, not the record.',
-	},
-	{
 		key: 'operatingMap',
 		scope: 'run',
 		reason:

@@ -1,9 +1,12 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { init } from '@flue/runtime';
 import { start } from '@flue/runtime/node';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { OperatingMap } from '../domain/operating-map.ts';
+import { auditStore } from '../store/audit.ts';
 import * as v from 'valibot';
 
 // Live-model behavioural eval. It drives the real Fieldguide agent against the
@@ -39,6 +42,12 @@ describe.skipIf(!enabled)('behavioural gold cases (live model)', () => {
 	let knownIds: Set<string>;
 
 	beforeAll(async () => {
+		// Each eval run is a run of its own audit, against a throwaway store: the
+		// agent resolves its audit before the first model turn, so one has to exist.
+		process.env.FIELDGUIDE_AUDIT_DB = join(
+			mkdtempSync(join(tmpdir(), 'fieldguide-eval-')),
+			'audit.db',
+		);
 		({ Fieldguide } = await import('../agents/fieldguide.ts'));
 		const { evidenceIds } = await import('../tools/evidence.ts');
 		knownIds = evidenceIds;
@@ -61,8 +70,10 @@ describe.skipIf(!enabled)('behavioural gold cases (live model)', () => {
 				if (existsSync(mapPath)) rmSync(mapPath);
 				let produced: v.InferOutput<typeof OperatingMap> | undefined;
 				try {
-					const agent = init(Fieldguide, { id: `eval-${Date.now()}-${run}` });
-					const receipt = await agent.dispatch(OBJECTIVE);
+					const auditId = `eval-audit-${Date.now()}-${run}`;
+					auditStore().createAudit({ auditId, objective: OBJECTIVE });
+					const agent = init(Fieldguide, { id: `eval-run-${Date.now()}-${run}` });
+					const receipt = await agent.dispatch({ message: OBJECTIVE, initialData: { auditId } });
 					await agent.read(receipt, { signal: AbortSignal.timeout(RUN_TIMEOUT_MS) });
 					if (existsSync(mapPath)) {
 						const parsed = v.safeParse(OperatingMap, JSON.parse(readFileSync(mapPath, 'utf8')));

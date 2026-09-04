@@ -4,6 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"check:types": "tsc --noEmit",
+		"audit": "node --experimental-strip-types src/cli/audit.ts",
 		"lint": "oxlint",
 		"format": "oxfmt src",
 		"format:check": "oxfmt --check src",

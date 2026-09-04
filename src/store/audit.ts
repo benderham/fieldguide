@@ -250,11 +250,17 @@ export function openAuditStore(options: AuditStoreOptions = {}) {
 		return audit;
 	}
 
-	/** Open a run against an audit, stamping the objective this run was given. */
+	/**
+	 * Open a run against an audit, stamping the objective this run was given.
+	 *
+	 * Idempotent: the intake seam fires once per delivered message, so a second
+	 * message to a live run calls this again. The first objective stands, because
+	 * the objective a run is judged against is the one it started on.
+	 */
 	function beginRun(input: { auditId: string; runId: string; objective: string }): void {
 		requireAudit(input.auditId);
 		db.prepare(
-			'INSERT INTO runs (runId, auditId, objective, startedAt, standing) VALUES (?, ?, ?, ?, ?)',
+			'INSERT OR IGNORE INTO runs (runId, auditId, objective, startedAt, standing) VALUES (?, ?, ?, ?, ?)',
 		).run(input.runId, input.auditId, input.objective, now(), 'running');
 	}
 
@@ -616,3 +622,27 @@ export function openAuditStore(options: AuditStoreOptions = {}) {
 }
 
 export type AuditStore = ReturnType<typeof openAuditStore>;
+
+let shared: AuditStore | undefined;
+
+/**
+ * The process-wide store handle, opened on first use. Agent code reaches the
+ * store through this, never by opening its own: the handle is only ever taken
+ * from an async seam (a tool, or the intake callback), because a render must not
+ * do I/O.
+ *
+ * `FIELDGUIDE_AUDIT_DB` points it elsewhere, which is how a test or an eval runs
+ * against a throwaway database instead of the project's.
+ */
+export function auditStore(): AuditStore {
+	if (shared === undefined) {
+		shared = openAuditStore({ path: process.env.FIELDGUIDE_AUDIT_DB ?? defaultPath });
+	}
+	return shared;
+}
+
+/** Drop the shared handle, so the next caller opens the database named by the environment. Tests use this; nothing else should. */
+export function resetAuditStore(): void {
+	shared?.close();
+	shared = undefined;
+}

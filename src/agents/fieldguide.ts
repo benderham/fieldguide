@@ -1,8 +1,10 @@
 'use agent';
 import {
+	type AgentProps,
 	defineTool,
 	useAgentStart,
 	useDelivery,
+	useInitialData,
 	useModel,
 	usePersistentState,
 	useTool,
@@ -10,7 +12,10 @@ import {
 import * as v from 'valibot';
 import { assertValidObjective } from '../domain/objective.ts';
 import type { OperatingMapDraft } from '../domain/operating-map.ts';
+import { seedBlocks } from '../domain/seed.ts';
 import { MAX_STEPS, overTurnCap, stepGate, TURN_CAP } from '../domain/workflow-map.ts';
+import { auditStore } from '../store/audit.ts';
+import { noteRead, runKnowledge } from '../store/run-context.ts';
 import { createOperatingMapTools, evidence } from '../tools/evidence.ts';
 import { notionEnabled, notionTools } from '../tools/notion.ts';
 // Registers a Fireworks provider whose catalog includes the pinned model below.
@@ -26,28 +31,73 @@ function verifyFixtureQuote(evidenceId: string, quote: string): boolean {
 	return normalize(excerpt.body).includes(normalize(quote));
 }
 
-export function Fieldguide() {
+/**
+ * Which audit this run belongs to. Validated synchronously at admission, before
+ * anything durable is written, so a run against an id the store does not hold
+ * fails before the first model turn rather than accumulating into nothing.
+ */
+const AuditIdentity = v.object({
+	auditId: v.pipe(v.string(), v.minLength(1, 'an auditId is required')),
+});
+
+export function Fieldguide({ id: runId }: AgentProps) {
 	useModel('fireworks/accounts/fireworks/models/deepseek-v4-flash-0731');
 
-	// Validate the submitted objective at the intake seam: a throw here fails the
-	// submission before the first model turn. Signals carry no human input, so
-	// only user deliveries are checked. This validated objective is the one the
-	// finished map is stamped with; the model never supplies its own.
+	// A run is one bounded pass over an audit: a fresh instance with an empty
+	// transcript, its own budgets, and no memory of any earlier run except the
+	// canonical records the audit store hands it at intake. The audit itself lives
+	// in the store, not in Flue, which is what keeps a resumed run from inheriting
+	// a previous run's reasoning along with its findings.
+	const { auditId } = useInitialData<v.InferOutput<typeof AuditIdentity>>() ?? { auditId: '' };
+
 	const delivery = useDelivery();
-	useAgentStart(() => {
-		if (delivery.kind === 'user') assertValidObjective(delivery.body);
-	});
 	const objective = delivery.kind === 'user' ? delivery.body.trim() : '';
+
+	// The intake seam: validate the submitted objective, resolve the audit, open
+	// the run, and seed the model with what the audit already knows. A throw here
+	// fails the submission before the first model turn. Signals carry no human
+	// input, so only user deliveries are checked.
+	useAgentStart(async (ctx) => {
+		if (delivery.kind === 'user') assertValidObjective(delivery.body);
+		const store = auditStore();
+		store.requireAudit(auditId);
+		store.beginRun({ auditId, runId, objective });
+
+		// Seeded as signals rather than as instruction text: a durable write made
+		// here is not visible until the next render, which happens after the first
+		// turn, and interpolating a growing register into the instructions would
+		// bust the provider's prompt cache on every one of them.
+		const state = store.auditState(auditId);
+		for (const block of seedBlocks(state)) {
+			ctx.append({
+				kind: 'signal',
+				type: block.type,
+				tagName: block.tagName,
+				body: block.body,
+			});
+		}
+	});
 
 	const [stepsUsed, setStepsUsed] = usePersistentState('stepsUsed', 0);
 	const [turnsUsed, setTurnsUsed] = usePersistentState('turnsUsed', 0);
-	const [readIds, setReadIds] = usePersistentState<string[]>('readIds', []);
 	const [draft, setDraft] = usePersistentState<OperatingMapDraft>('operatingMap', {});
 
 	const spend = () => setStepsUsed((previous) => previous + 1);
 	const spendTurn = () => setTurnsUsed((previous) => previous + 1);
-	const recordRead = (id: string) =>
-		setReadIds((previous) => (previous.includes(id) ? previous : [...previous, id]));
+
+	// A read is written through to the audit as it happens rather than held until
+	// the finish seam: opening a document is an event that occurred, not a
+	// judgement awaiting validation, so a run that never finishes still leaves the
+	// audit knowing what was looked at.
+	const recordRead = (evidenceId: string) => {
+		auditStore().recordRead({ auditId, runId, evidenceId });
+		noteRead(runId, auditId, evidenceId);
+	};
+
+	// Which documents may be cited: everything this audit has read, in this run or
+	// an earlier one. Read from the store on first use inside a tool, never during
+	// a render.
+	const isKnownId = (evidenceId: string) => runKnowledge(runId, auditId).knownIds.has(evidenceId);
 
 	// A Notion credential switches the agent onto the live workspace; without one
 	// it runs against the local fixtures, which is how the evals exercise the loop.
@@ -58,7 +108,7 @@ export function Fieldguide() {
 	// back durably. The mirror lets finish and the progress messages see sections
 	// recorded earlier in the same turn, which the captured snapshot alone would miss.
 	const operatingMap = createOperatingMapTools({
-		isKnownId: (id) => readIds.includes(id),
+		isKnownId,
 		getState: () => draft,
 		patch: (partial) => setDraft((previous) => ({ ...previous, ...partial })),
 		objective,
@@ -128,6 +178,20 @@ export function Fieldguide() {
 		'The user gives you an audit objective. Reconstruct how the work actually',
 		'happens from the evidence you can reach, then produce a full operating map:',
 		'the eight deliverables below, each traceable to the evidence it rests on.',
+		'',
+	];
+
+	// A resumed run is told what the audit already holds, as tagged blocks ahead of
+	// the objective. They are records, not a previous run's conclusions: no earlier
+	// map is ever handed back, so the findings are re-derived from the evidence.
+	const resumed = [
+		'This audit may have been investigated before. Any evidence, open questions',
+		'and unresolved contradictions earlier runs recorded are supplied to you as',
+		'tagged blocks ahead of the objective. Treat them as established evidence:',
+		'you may record a supplied claim as your own without re-reading its document,',
+		'and you should answer or carry forward the questions rather than raise them',
+		"again. You are never given an earlier run's conclusions; the map is yours to",
+		'reach from the evidence.',
 		'',
 	];
 
@@ -205,5 +269,7 @@ export function Fieldguide() {
 		'- Finish only by calling finish_operating_map.',
 	];
 
-	return [...intro, ...investigate, ...budget, ...record, ...rules].join('\n');
+	return [...intro, ...resumed, ...investigate, ...budget, ...record, ...rules].join('\n');
 }
+
+Fieldguide.initialData = AuditIdentity;
