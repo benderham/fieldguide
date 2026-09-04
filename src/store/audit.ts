@@ -277,6 +277,16 @@ export function openAuditStore(options: AuditStoreOptions = {}) {
 		).run(input.auditId, input.evidenceId, input.runId, now());
 	}
 
+	/** Every document one run opened, including re-reads of what an earlier run had already seen. */
+	function runReads(auditId: string, runId: string): string[] {
+		const rows = db
+			.prepare(
+				'SELECT evidenceId FROM reads WHERE auditId = ? AND runId = ? ORDER BY readAt, rowid',
+			)
+			.all(auditId, runId) as Array<{ evidenceId: string }>;
+		return rows.map((row) => row.evidenceId);
+	}
+
 	/** Every document this audit has opened, in any run. What makes an inherited citation checkable. */
 	function readSet(auditId: string): string[] {
 		const rows = db
@@ -611,6 +621,7 @@ export function openAuditStore(options: AuditStoreOptions = {}) {
 		beginRun,
 		recordRead,
 		readSet,
+		runReads,
 		accumulate,
 		answerQuestion,
 		saveSnapshot,

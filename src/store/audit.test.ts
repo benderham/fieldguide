@@ -72,6 +72,19 @@ describe('the read set', () => {
 		expect(store.readSet('a1')).toEqual(['interview-dana', 'policy-approval']);
 	});
 
+	it('tells a re-read apart from an inherited one', () => {
+		store.recordRead({ auditId: 'a1', runId: 'r1', evidenceId: 'policy-approval' });
+		store.recordRead({ auditId: 'a1', runId: 'r1', evidenceId: 'interview-dana' });
+		store.beginRun({ auditId: 'a1', runId: 'r2', objective: 'second pass' });
+		store.recordRead({ auditId: 'a1', runId: 'r2', evidenceId: 'policy-approval' });
+
+		// The audit has read both; the second run itself opened only one, and the
+		// other it inherited.
+		expect(store.readSet('a1')).toHaveLength(2);
+		expect(store.runReads('a1', 'r2')).toEqual(['policy-approval']);
+		expect(store.runReads('a1', 'r1')).toEqual(['policy-approval', 'interview-dana']);
+	});
+
 	it('keeps a read from a run that never existed out of the audit', () => {
 		expect(() =>
 			store.recordRead({ auditId: 'a1', runId: 'ghost', evidenceId: 'policy-approval' }),
