@@ -1,9 +1,10 @@
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineTool } from '@flue/runtime';
 import * as v from 'valibot';
 import { type Excerpt, parseExcerpt } from '../domain/excerpt.ts';
+import type { RunOutcome } from '../domain/envelope.ts';
 import {
 	Claim,
 	Contradiction,
@@ -11,7 +12,6 @@ import {
 	FrictionRisk,
 	OpenQuestion,
 	OperatingMap,
-	type OperatingMap as OperatingMapType,
 	type OperatingMapDraft,
 	Opportunity,
 	type Provenance,
@@ -21,19 +21,9 @@ import {
 	WorkflowStep,
 	validateCrossRefs,
 } from '../domain/operating-map.ts';
+import { persistRun } from '../store/persist.ts';
 
 const evidenceDir = fileURLToPath(new URL('../../evidence/', import.meta.url));
-
-// Stand-in for the durable evidence store described in the README. For this
-// slice the deliverable is written to a file so a run produces something a
-// reviewer can open.
-const mapPath = fileURLToPath(new URL('../../data/last-operating-map.json', import.meta.url));
-
-// A turn-capped run writes its partial map here, kept separate from the finished
-// artifact so a reviewer never mistakes an incomplete map for a final one.
-const incompletePath = fileURLToPath(
-	new URL('../../data/last-operating-map.incomplete.json', import.meta.url),
-);
 
 /** Load every `.md` excerpt from the evidence directory, sorted by filename. */
 export function loadEvidence(dir: string = evidenceDir): Excerpt[] {
@@ -45,21 +35,6 @@ export function loadEvidence(dir: string = evidenceDir): Excerpt[] {
 
 export const evidence = loadEvidence();
 export const evidenceIds = new Set(evidence.map((item) => item.id));
-
-/** Write a finished operating map to disk as JSON, creating the target directory. */
-export function saveOperatingMap(map: OperatingMapType, path: string = mapPath): void {
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, JSON.stringify(map, null, 2));
-}
-
-/** Write a turn-capped partial map to disk, kept apart from the finished artifact. */
-export function saveIncompleteMap(
-	map: IncompleteOperatingMap,
-	path: string = incompletePath,
-): void {
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, JSON.stringify(map, null, 2));
-}
 
 export const listEvidence = defineTool({
 	name: 'list_evidence',
@@ -75,8 +50,13 @@ export type OperatingMapToolDeps = {
 	isKnownId: (id: string) => boolean;
 	getState: () => OperatingMapDraft;
 	patch: (partial: OperatingMapDraft) => void;
-	save?: (map: OperatingMapType) => void;
-	saveIncomplete?: (map: IncompleteOperatingMap) => void;
+	// The promotion seam: accumulate the run's evidence and questions into the
+	// audit, keep its conclusions as history, and write the envelope. Injected so
+	// the tools stay testable without a store.
+	persist?: (outcome: RunOutcome) => string;
+	// Which audit this run belongs to, and which run it is. Stamped on the record.
+	auditId: string;
+	runId: string;
 	// The validated audit objective. Stamped onto the map at finish so the model
 	// never persists an objective of its own.
 	objective: string;
@@ -89,18 +69,6 @@ export type OperatingMapToolDeps = {
 	// fixtures path, where the bodies are in hand; omitted on the live path,
 	// where read bodies are not retained.
 	verifyQuote?: (evidenceId: string, quote: string) => boolean;
-};
-
-/**
- * A map saved when the turn budget runs out before the map is whole. It carries
- * whatever sections were recorded, is always `provisional`, and never passes as
- * a final `OperatingMap`.
- */
-export type IncompleteOperatingMap = {
-	incomplete: true;
-	provenance: Provenance;
-	status: 'provisional';
-	draft: OperatingMapDraft;
 };
 
 // The objective is not here: it is the validated audit objective, stamped by the
@@ -148,8 +116,7 @@ function firstIssue(
  * so eval runs verify against fixture ids and live runs against fetched ids.
  */
 export function createOperatingMapTools(deps: OperatingMapToolDeps) {
-	const save = deps.save ?? saveOperatingMap;
-	const saveIncomplete = deps.saveIncomplete ?? saveIncompleteMap;
+	const persist = deps.persist ?? persistRun;
 	const spendTurn = deps.spendTurn ?? (() => {});
 
 	// Flue re-renders the agent each turn, so this factory runs per turn and seeds
@@ -310,9 +277,16 @@ export function createOperatingMapTools(deps: OperatingMapToolDeps) {
 				return `The map has dangling references: ${problems.join(' ')} Fix them and finish again.`;
 			}
 
-			save(parsed.output);
+			const saved = persist({
+				auditId: deps.auditId,
+				runId: deps.runId,
+				objective: deps.objective,
+				provenance: deps.provenance,
+				incomplete: false,
+				map: parsed.output,
+			});
 			return {
-				output: { map: parsed.output, saved: 'data/last-operating-map.json' },
+				output: { map: parsed.output, saved },
 				terminate: true,
 			};
 		},
@@ -350,21 +324,23 @@ export function createOperatingMapTools(deps: OperatingMapToolDeps) {
 				}
 			}
 
-			const payload: IncompleteOperatingMap = {
-				incomplete: true,
+			const saved = persist({
+				auditId: deps.auditId,
+				runId: deps.runId,
+				objective: deps.objective,
 				provenance: deps.provenance,
-				status: 'provisional',
+				incomplete: true,
 				draft: partial,
-			};
-			saveIncomplete(payload);
+				...(withheld === undefined ? {} : { withheld }),
+			});
 
 			const withheldNote = withheld
 				? ` Withheld the prohibited autonomous-approval recommendation for '${withheld}'.`
 				: '';
 			return {
 				output: {
-					map: payload,
-					saved: 'data/last-operating-map.incomplete.json',
+					draft: partial,
+					saved,
 					note: `Turn budget spent. Saved a provisional, incomplete map.${withheldNote}`,
 				},
 				terminate: true,

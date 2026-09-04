@@ -109,6 +109,8 @@ export function Fieldguide({ id: runId }: AgentProps) {
 	// recorded earlier in the same turn, which the captured snapshot alone would miss.
 	const operatingMap = createOperatingMapTools({
 		isKnownId,
+		auditId,
+		runId,
 		getState: () => draft,
 		patch: (partial) => setDraft((previous) => ({ ...previous, ...partial })),
 		objective,

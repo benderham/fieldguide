@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,7 +6,9 @@ import { init } from '@flue/runtime';
 import { start } from '@flue/runtime/node';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { OperatingMap } from '../domain/operating-map.ts';
+import type { RunEnvelope } from '../domain/envelope.ts';
 import { auditStore } from '../store/audit.ts';
+import { envelopePath } from '../store/persist.ts';
 import * as v from 'valibot';
 
 // Live-model behavioural eval. It drives the real Fieldguide agent against the
@@ -19,7 +21,6 @@ const RUNS = Number(process.env.EVAL_RUNS ?? 5);
 const TARGET = Number(process.env.EVAL_TARGET ?? 3);
 const RUN_TIMEOUT_MS = Number(process.env.EVAL_RUN_TIMEOUT_MS ?? 300_000);
 
-const mapPath = fileURLToPath(new URL('../../data/last-operating-map.json', import.meta.url));
 const OBJECTIVE =
 	'Audit how SignalWire receives, reviews, approves, and distributes client press releases. Reconstruct how the work actually happens and produce the full operating map.';
 
@@ -67,16 +68,19 @@ describe.skipIf(!enabled)('behavioural gold cases (live model)', () => {
 			const summary: string[] = [];
 
 			for (let run = 0; run < RUNS; run++) {
-				if (existsSync(mapPath)) rmSync(mapPath);
 				let produced: v.InferOutput<typeof OperatingMap> | undefined;
 				try {
 					const auditId = `eval-audit-${Date.now()}-${run}`;
+					const runId = `eval-run-${Date.now()}-${run}`;
 					auditStore().createAudit({ auditId, objective: OBJECTIVE });
-					const agent = init(Fieldguide, { id: `eval-run-${Date.now()}-${run}` });
+					const agent = init(Fieldguide, { id: runId });
 					const receipt = await agent.dispatch({ message: OBJECTIVE, initialData: { auditId } });
 					await agent.read(receipt, { signal: AbortSignal.timeout(RUN_TIMEOUT_MS) });
-					if (existsSync(mapPath)) {
-						const parsed = v.safeParse(OperatingMap, JSON.parse(readFileSync(mapPath, 'utf8')));
+					// One envelope per run, so nothing has to be cleared between runs.
+					const path = envelopePath(auditId, runId);
+					if (existsSync(path)) {
+						const envelope = JSON.parse(readFileSync(path, 'utf8')) as RunEnvelope;
+						const parsed = v.safeParse(OperatingMap, envelope.map);
 						if (parsed.success) produced = parsed.output;
 					}
 				} catch (error) {

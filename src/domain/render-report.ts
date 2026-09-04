@@ -1,3 +1,4 @@
+import type { RetentionEntry } from './retention.ts';
 import type {
 	Claim,
 	Contradiction,
@@ -16,7 +17,7 @@ import type {
  * deliverable, in the order of the copilot assignment, with the human-control
  * points called out up front so a reviewer sees them before anything else.
  */
-export function renderReport(map: OperatingMap): string {
+export function renderReport(map: OperatingMap, retention?: RetentionEntry[]): string {
 	const claimById = new Map(map.claims.map((c) => [c.claimId, c]));
 	const quote = (id: string | undefined): string => {
 		if (id === undefined) return '_none_';
@@ -73,6 +74,17 @@ export function renderReport(map: OperatingMap): string {
 	if (map.expectedValue.assumptions.length === 0) lines.push('- _none_');
 	for (const a of map.expectedValue.assumptions) lines.push(`- ${a}`);
 	lines.push('');
+
+	// What the run kept and why, at both scopes. A reader who wants to know what
+	// this record rests on should be able to see what outlived the run that made
+	// it — including the parts deliberately discarded.
+	if (retention !== undefined && retention.length > 0) {
+		lines.push('---', '', '## What this run retained, and why', '');
+		for (const entry of retention) {
+			lines.push(`- **${entry.key}** (${entry.scope}): ${entry.reason}`);
+		}
+		lines.push('');
+	}
 
 	return lines.join('\n');
 }

@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { OperatingMap, OperatingMapDraft } from '../domain/operating-map.ts';
-import {
-	createOperatingMapTools,
-	evidence,
-	type IncompleteOperatingMap,
-	listEvidence,
-} from './evidence.ts';
+import type { RunOutcome } from '../domain/envelope.ts';
+import { createOperatingMapTools, evidence, listEvidence } from './evidence.ts';
 
 // The tools only read `data`; the rest of the run() context is not exercised here.
 const ctx = <T>(data: T) => ({ data }) as never;
@@ -17,8 +13,7 @@ function harness(
 	objective = 'Audit approvals',
 ) {
 	let state: OperatingMapDraft = {};
-	let saved: OperatingMap | undefined;
-	let savedIncomplete: IncompleteOperatingMap | undefined;
+	let persisted: RunOutcome | undefined;
 	let turns = 0;
 	const tools = createOperatingMapTools({
 		isKnownId,
@@ -26,11 +21,11 @@ function harness(
 		patch: (partial) => {
 			state = { ...state, ...partial };
 		},
-		save: (map) => {
-			saved = map;
-		},
-		saveIncomplete: (map) => {
-			savedIncomplete = map;
+		auditId: 'a1',
+		runId: 'r1',
+		persist: (outcome) => {
+			persisted = outcome;
+			return `data/audits/a1/r1.json`;
 		},
 		objective,
 		provenance,
@@ -41,8 +36,8 @@ function harness(
 	return {
 		tools,
 		getState: () => state,
-		getSaved: () => saved,
-		getSavedIncomplete: () => savedIncomplete,
+		getSaved: () => (persisted?.incomplete === false ? persisted.map : undefined),
+		getSavedIncomplete: () => (persisted?.incomplete === true ? persisted : undefined),
 		getTurns: () => turns,
 	};
 }
@@ -281,15 +276,17 @@ describe('finish_incomplete', () => {
 			}),
 		);
 		const result = (await h.tools.finishIncomplete.run(ctx({}))) as {
-			output: { map: IncompleteOperatingMap };
+			output: { draft: OperatingMapDraft };
 			terminate: boolean;
 		};
 		expect(result.terminate).toBe(true);
 		const saved = h.getSavedIncomplete();
 		expect(saved?.incomplete).toBe(true);
-		expect(saved?.status).toBe('provisional');
-		expect(saved?.draft.claims).toHaveLength(1);
-		expect(saved?.draft.recommendation).toBeUndefined();
+		// No `map`, only a `draft`: a partial run's record is structurally distinct
+		// from a finished one, so a reviewer cannot mistake it for a final map.
+		expect(saved?.map).toBeUndefined();
+		expect(saved?.draft?.claims).toHaveLength(1);
+		expect(saved?.draft?.recommendation).toBeUndefined();
 	});
 
 	async function recordClaimAndOpportunity(
@@ -346,7 +343,7 @@ describe('finish_incomplete', () => {
 		await recordClaimAndOpportunity(h.tools, true);
 		await h.tools.recordRecommendation.run(ctx(rec({ aiRole: 'autonomous' })));
 		await h.tools.finishIncomplete.run(ctx({}));
-		expect(h.getSavedIncomplete()?.draft.recommendation).toBeUndefined();
+		expect(h.getSavedIncomplete()?.draft?.recommendation).toBeUndefined();
 	});
 
 	it('withholds a recommendation whose support cites unread, unrecorded evidence', async () => {
@@ -354,7 +351,7 @@ describe('finish_incomplete', () => {
 		await recordClaimAndOpportunity(h.tools, false);
 		await h.tools.recordRecommendation.run(ctx(rec({ supportRefs: ['ghost'] })));
 		await h.tools.finishIncomplete.run(ctx({}));
-		expect(h.getSavedIncomplete()?.draft.recommendation).toBeUndefined();
+		expect(h.getSavedIncomplete()?.draft?.recommendation).toBeUndefined();
 	});
 
 	it('keeps a supported, compliant recommendation', async () => {
@@ -362,7 +359,7 @@ describe('finish_incomplete', () => {
 		await recordClaimAndOpportunity(h.tools, false);
 		await h.tools.recordRecommendation.run(ctx(rec({})));
 		await h.tools.finishIncomplete.run(ctx({}));
-		expect(h.getSavedIncomplete()?.draft.recommendation).toBeDefined();
+		expect(h.getSavedIncomplete()?.draft?.recommendation).toBeDefined();
 	});
 });
 
