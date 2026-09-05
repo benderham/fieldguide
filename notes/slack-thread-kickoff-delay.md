@@ -1,4 +1,4 @@
-A Slack thread from #delivery about a kickoff that slipped, and what the team actually did.
+A Slack thread from #delivery about a kickoff that slipped.
 
 ---
 
